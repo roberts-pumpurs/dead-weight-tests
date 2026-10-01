@@ -3,7 +3,7 @@ name: dead-weight-tests
 description: >-
   Use when looking for redundant, low-value, or LLM-generated tests to cut in a Rust project that runs tests with cargo-nextest. Triggers include "dead weight tests", "redundant tests", "test redundancy", "which tests can we delete", "tests covered by other tests", or per-test coverage analysis. Collects per-test region coverage, finds tests whose coverage duplicates, is contained in, or nearly matches another test, renders an interactive HTML report, and records reviewed cut verdicts.
 metadata:
-  version: "0.1.0" # x-release-please-version
+  version: "0.1.1" # x-release-please-version
 ---
 
 # Dead-weight tests
