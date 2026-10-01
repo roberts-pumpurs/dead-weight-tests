@@ -30,7 +30,7 @@ while [[ $# -gt 0 ]]; do
     --nextest) nextest="$2"; shift 2 ;;
     --before) before="$2"; shift 2 ;;
     --) shift; break ;;
-    -h|--help) sed -n '2,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) break ;;
   esac
 done
