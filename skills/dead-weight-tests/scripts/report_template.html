@@ -1,0 +1,1060 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dead-weight tests</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.10.0/styles/github.min.css">
+<script src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/elkjs@0.9.3/lib/elk.bundled.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape-elk@2.3.0/dist/cytoscape-elk.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape-expand-collapse@4.1.1/cytoscape-expand-collapse.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape-navigator@2.0.2/cytoscape-navigator.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@upsetjs/bundle@1.11.0/dist/upsetjs.umd.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.10.0/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.10.0/languages/rust.min.js"></script>
+<style>
+  :root { --fg: #1f2937; --mute: #6b7280; --line: #e5e7eb; --accent: #2563eb; }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--fg); background: #f9fafb; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+  #top { position: sticky; top: 0; z-index: 5; }
+  header { display: flex; align-items: center; gap: 16px; padding: 8px 16px; background: #111827; color: #f9fafb; }
+  header h1 { font-size: 15px; margin: 0; }
+  header nav a { color: #d1d5db; padding: 3px 9px; border-radius: 4px; }
+  header nav a.on { background: #374151; color: #fff; }
+  header .meta { margin-left: auto; color: #9ca3af; font-size: 12px; }
+  header .btn { background: #1f2937; color: #f9fafb; border-color: #4b5563; }
+  #filters { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; padding: 7px 16px; background: #fff; border-bottom: 1px solid var(--line); }
+  #filters input[type=search] { width: 260px; }
+  main { padding: 16px; }
+  section { background: #fff; border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; margin-bottom: 16px; }
+  h2 { font-size: 14px; margin: 0 0 10px; display: flex; align-items: center; gap: 10px; }
+  h3 { font-size: 13px; margin: 12px 0 6px; }
+  button, .btn { font: inherit; padding: 3px 10px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; color: #111827; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  input, select { font: inherit; }
+  .mute { color: var(--mute); }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
+  .card { border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
+  .card b { display: block; font-size: 18px; font-variant-numeric: tabular-nums; }
+  .card span { color: var(--mute); font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
+  details { margin-top: 10px; }
+  details ul { max-height: 240px; overflow: auto; margin: 6px 0; }
+  table.grid { width: 100%; border-collapse: collapse; }
+  .grid th, .grid td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  .grid th { font-size: 11px; text-transform: uppercase; color: var(--mute); user-select: none; }
+  .grid th[data-sort] { cursor: pointer; }
+  .grid .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .grid tr.click { cursor: pointer; }
+  .grid tr.click:hover, .grid tr.on { background: #eff6ff; }
+  .clip { max-width: 440px; overflow: hidden; text-overflow: ellipsis; }
+  .pager { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+  .badge { display: inline-block; padding: 0 7px; border-radius: 9px; font-size: 11px; font-weight: 600; }
+  .k-duplicate { background: #e0e7ff; color: #3730a3; }
+  .k-subsumed { background: #f3e8ff; color: #6b21a8; }
+  .k-near { background: #dbeafe; color: #1e40af; }
+  .v-cut { background: #fee2e2; color: #b91c1c; }
+  .v-merge { background: #fef3c7; color: #92400e; }
+  .v-keep { background: #dcfce7; color: #166534; }
+  .v-none { background: #f3f4f6; color: #6b7280; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; background: #eef2ff; border-radius: 10px; padding: 0 8px; }
+  .chip button { border: 0; background: none; padding: 0 2px; }
+  dl.info { display: grid; grid-template-columns: max-content 1fr; gap: 2px 14px; margin: 0; }
+  dl.info dt { color: var(--mute); }
+  dl.info dd { margin: 0; }
+  .split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+  .side { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 12px; align-items: start; }
+  .side aside { position: sticky; top: 56px; max-height: calc(100vh - 72px); overflow: auto; margin: 0; }
+  .code { font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; border: 1px solid var(--line); border-radius: 4px; overflow: auto; background: #fff; }
+  .code.tall { max-height: 72vh; }
+  .ln { display: flex; white-space: pre; min-width: max-content; }
+  .ln .no { position: sticky; left: 0; flex: 0 0 54px; text-align: right; padding-right: 6px; color: #9ca3af; background: #fafafa; border-right: 4px solid transparent; user-select: none; }
+  .ln .src { padding: 0 8px; }
+  /* Pair line status: b both, o other-only, t candidate-only, u instrumented but covered by neither. */
+  .ln.b { background: #eff6ff; } .ln.b .no { border-right-color: #3b82f6; }
+  .ln.o { background: #fff7ed; } .ln.o .no { border-right-color: #f97316; }
+  .ln.t { background: #f0fdf4; } .ln.t .no { border-right-color: #22c55e; }
+  .ln.u .no { border-right-color: #fca5a5; }
+  .fold { padding: 1px 0 1px 70px; background: #f3f4f6; color: var(--mute); cursor: pointer; font-style: italic; }
+  .fold:hover { background: #e5e7eb; }
+  /* File view heat bar. */
+  .file .ln { cursor: pointer; }
+  .heat { flex: 0 0 46px; position: relative; background: #f9fafb; }
+  .heat i { position: absolute; left: 0; top: 2px; bottom: 2px; background: #fb923c; }
+  .ln.u .heat { background: #fee2e2; }
+  .ln.hit { background: #ecfdf5; } .ln.hit .no { border-right-color: #10b981; }
+  .ln.sel { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .legend { color: var(--mute); }
+  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: -2px; margin: 0 3px 0 10px; border: 1px solid #0002; }
+  #treemap svg { display: block; }
+  #treemap text { font-size: 10px; pointer-events: none; fill: #111827; }
+  #treemap .bin { font-weight: 600; fill: #374151; }
+  #treemap .cell { cursor: pointer; }
+  #treemap .cell.sel rect { stroke: #111827; stroke-width: 3; }
+  .graph-bar { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin-bottom: 8px; }
+  .notice { background: #fef3c7; color: #92400e; padding: 2px 8px; border-radius: 4px; }
+  .graph-wrap { position: relative; }
+  /* Code panel: click a test or edge in the graph to read the source without leaving the graph. */
+  #g-detail { position: absolute; top: 10px; right: 10px; width: min(560px, 45%); max-height: calc(100% - 180px); overflow: auto; z-index: 6; background: #fff; border: 1px solid #9ca3af; border-radius: 6px; padding: 10px 12px; box-shadow: 0 4px 16px #0002; }
+  #g-detail h3 { margin: 10px 0 4px; font-size: 13px; }
+  #g-detail .close { float: right; }
+  #cy { height: calc(100vh - 200px); min-height: 400px; background: #fff; border: 1px solid var(--line); border-radius: 6px; }
+  .graph-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .graph-tools input[type=search] { width: 240px; }
+  /* Minimap: cytoscape-navigator draws a thumbnail plus a draggable viewport box into this container. */
+  #cy-nav { position: absolute; right: 10px; bottom: 10px; width: 200px; height: 140px; background: #fff; border: 1px solid #9ca3af; border-radius: 4px; overflow: hidden; z-index: 5; }
+  #cy-nav > img { max-width: 100%; max-height: 100%; }
+  #cy-nav > canvas { position: absolute; top: 0; left: 0; }
+  #cy-nav .cytoscape-navigatorView { position: absolute; top: 0; left: 0; cursor: move; background: #93c5fd; opacity: .45; }
+  #cy-nav .cytoscape-navigatorOverlay { position: absolute; inset: 0; }
+  #upset-plot { min-height: 60px; }
+  #tip { position: fixed; z-index: 10; background: #111827; color: #f9fafb; font-size: 12px; padding: 6px 8px; border-radius: 4px; pointer-events: none; white-space: pre; }
+  #toast { position: fixed; right: 16px; bottom: 16px; z-index: 10; background: #111827; color: #fff; padding: 8px 12px; border-radius: 6px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div id="top">
+  <header>
+    <h1>Dead-weight tests</h1>
+    <nav><a href="#/overview" data-view="overview">Overview</a> <a href="#/graph" data-view="graph">Graph</a></nav>
+    <label class="btn">Load verdicts.jsonl <input type="file" id="verdict-file" accept=".jsonl,.json,.txt" hidden></label>
+    <span id="verdict-status"></span>
+    <span class="meta" id="meta"></span>
+  </header>
+  <div id="filters">
+    <span><label><input type="checkbox" data-kind="duplicate" checked> duplicate</label>
+      <label><input type="checkbox" data-kind="subsumed" checked> subsumed</label>
+      <label><input type="checkbox" data-kind="near" checked> near</label></span>
+    <select id="f-tier"><option value="">any tier</option><option value="unit">unit</option><option value="integration">integration</option></select>
+    <select id="f-verdict"><option value="">any verdict</option><option value="none">unreviewed</option><option value="reviewed">reviewed</option><option value="cut">cut</option><option value="merge">merge</option><option value="keep">keep</option></select>
+    <input type="search" id="f-q" placeholder="search test id">
+    <label>near Jaccard ≥ <input type="range" id="f-j" max="1" step="0.001"> <output id="f-j-out"></output></label>
+    <span id="f-module"></span>
+    <span id="f-count" class="mute"></span>
+  </div>
+</div>
+<main id="view"></main>
+<div id="tip" hidden></div>
+<div id="toast"></div>
+<script type="application/json" id="model">__MODEL_JSON__</script>
+<script>
+'use strict';
+const M = JSON.parse(document.getElementById('model').textContent);
+const { meta, files: F, regions: R, classes: CL, tests: T, candidates: C } = M;
+const KINDS = ['duplicate', 'subsumed', 'near'];
+const VERDICTS = ['cut', 'merge', 'keep'];
+const VERDICT_RANK = { '': 0, keep: 1, merge: 2, cut: 3 };
+const OTHER_ROLE = { duplicate: 'keeper', subsumed: 'witness', near: 'near twin' };
+// GRAPH_CAP bounds the nodes handed to cytoscape. Above COLLAPSE_AT the graph starts with file groups
+// collapsed, so the visible node count stays near the number of files.
+const PAGE = 50, GRAPH_CAP = 2000, COLLAPSE_AT = 120, UPSET_MAX = 8, LIST_CAP = 300;
+const NO_IDS = new Int32Array(0);
+
+// ---------- helpers
+const $ = (sel, root = document) => root.querySelector(sel);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, ch => `&#${ch.charCodeAt(0)};`);
+const num = n => n.toLocaleString('en-US');
+const fmtJ = j => String(+j.toFixed(3));
+const loc = t => t.location ?? 'location unknown';
+const short = t => t.name.split('::').slice(-2).join('::');
+const lazy = make => { let value; return () => (value ??= make()); };
+function cached(map, key, make, limit = 24) {
+  if (map.has(key)) return map.get(key);
+  const value = make();
+  if (map.size >= limit) map.delete(map.keys().next().value);
+  map.set(key, value);
+  return value;
+}
+const badge = (cls, text) => `<span class="badge ${cls}">${esc(text)}</span>`;
+const kindBadge = kind => badge('k-' + kind, kind);
+const verdictBadge = v => (v ? badge('v-' + v.verdict, v.verdict) : badge('v-none', 'unreviewed'));
+const testLink = ti => `<a href="#/test/${ti}" title="${esc(T[ti].id)}">${esc(T[ti].id)}</a>`;
+const regionSpan = r => `${R[r][1]}:${R[r][2]}–${R[r][3]}:${R[r][4]}`;
+
+function locLink(path, line) {
+  const fid = fileByPath().get(path);
+  const text = `<code>${esc(line ? `${path}:${line}` : path)}</code>`;
+  return fid === undefined ? text : `<a href="#/file/${fid}${line ? '/' + line : ''}">${text}</a>`;
+}
+function testLocLink(t) {
+  if (!t.location) return '<code>location unknown</code>';
+  const m = /^(.*):(\d+)$/.exec(t.location);
+  return m ? locLink(m[1], +m[2]) : locLink(t.location);
+}
+
+let toastTimer;
+function toast(text) {
+  const el = $('#toast');
+  el.textContent = text;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2500);
+}
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // file:// pages may lack the async clipboard; fall back to a hidden textarea.
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;opacity:0';
+    document.body.append(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  }
+}
+
+// ---------- verdicts: keyed by (candidate id, other id); later records overwrite earlier ones
+const verdicts = new Map();
+function addVerdicts(records) {
+  let added = 0;
+  for (const v of records) {
+    if (v && typeof v.test === 'string' && typeof v.other === 'string' && VERDICTS.includes(v.verdict)) {
+      verdicts.set(v.test + '\n' + v.other, v);
+      added++;
+    }
+  }
+  return added;
+}
+const verdictOf = c => verdicts.get(T[c.test].id + '\n' + T[c.other].id);
+addVerdicts(M.verdicts ?? []);
+
+// ---------- lazy indexes (built on first use; whole-model passes are too slow to run eagerly at 200k regions)
+const fileByPath = lazy(() => new Map(F.map((f, i) => [f.path, i])));
+const moduleOf = lazy(() => T.map(t => {
+  // Module key = binary id + first module segment of the test name, e.g. "my-crate parser".
+  const cut = t.name.indexOf('::');
+  return cut < 0 ? t.binary_id : `${t.binary_id} ${t.name.slice(0, cut)}`;
+}));
+// region id -> class id; -1 = no test covers the region.
+const regionClass = lazy(() => {
+  const out = new Int32Array(R.length).fill(-1);
+  CL.forEach((cls, ci) => { for (const r of cls) out[r] = ci; });
+  return out;
+});
+// One-to-many index stored as offsets + one flat Int32Array (compact for 12k tests x their classes).
+// `visit(emit)` must emit the same (bucket, value) pairs on both passes.
+function buckets(n, visit) {
+  const start = new Int32Array(n + 1);
+  visit(b => { start[b + 1]++; });
+  for (let i = 0; i < n; i++) start[i + 1] += start[i];
+  const flat = new Int32Array(start[n]), next = start.slice(0, n);
+  visit((b, v) => { flat[next[b]++] = v; });
+  return b => flat.subarray(start[b], start[b + 1]);
+}
+const classTests = lazy(() => buckets(CL.length, emit => T.forEach((t, ti) => { for (const c of t.classes) emit(c, ti); })));
+const fileRegions = lazy(() => buckets(F.length, emit => R.forEach((r, ri) => emit(r[0], ri))));
+const testsOfRegion = r => { const c = regionClass()[r]; return c < 0 ? NO_IDS : classTests()(c); };
+function candidatesBy(side) {
+  const out = new Map();
+  C.forEach((c, ci) => { const list = out.get(c[side]); list ? list.push(ci) : out.set(c[side], [ci]); });
+  return out;
+}
+const candsAsTest = lazy(() => candidatesBy('test'));
+const candsAsOther = lazy(() => candidatesBy('other'));
+
+function regionsOf(ti) {
+  const out = [];
+  for (const c of T[ti].classes) for (const r of CL[c]) out.push(r);
+  return out;
+}
+function regionsByFile(regionIds) {
+  const out = new Map();
+  for (const r of regionIds) out.set(R[r][0], (out.get(R[r][0]) ?? 0) + 1);
+  return out;
+}
+
+// Highlighted source, one HTML string per line. hljs spans can cross newlines, so every
+// line closes the spans still open and the next line reopens them.
+function highlight(code) {
+  const html = window.hljs ? hljs.highlight(code, { language: 'rust', ignoreIllegals: true }).value : esc(code);
+  const lines = [];
+  let open = [], cur = '';
+  for (const tok of html.match(/<span[^>]*>|<\/span>|\n|[^<\n]+/g) ?? []) {
+    if (tok === '\n') { lines.push(cur + '</span>'.repeat(open.length)); cur = open.join(''); }
+    else if (tok === '</span>') { open.pop(); cur += tok; }
+    else if (tok.startsWith('<span')) { open.push(tok); cur += tok; }
+    else cur += tok;
+  }
+  lines.push(cur + '</span>'.repeat(open.length));
+  if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+  return lines;
+}
+const sourceCache = new Map();
+const sourceLines = fid => cached(sourceCache, fid, () => (F[fid].source == null ? null : highlight(F[fid].source)));
+
+// Owner rule: a line's owner is the smallest region of its file containing it, ordered by
+// (l2 - l1, then c2 - c1). Painting regions largest-first lets nested regions overwrite their parents.
+const ownerCache = new Map();
+const owners = fid => cached(ownerCache, fid, () => {
+  const rs = Array.from(fileRegions()(fid));
+  rs.sort((a, b) => (R[b][3] - R[b][1]) - (R[a][3] - R[a][1]) || (R[b][4] - R[b][2]) - (R[a][4] - R[a][2]));
+  let n = F[fid].source == null ? 0 : F[fid].source.split('\n').length;
+  for (const r of rs) n = Math.max(n, R[r][3]);
+  const own = new Int32Array(n + 1).fill(-1);
+  for (const r of rs) for (let l = R[r][1]; l <= R[r][3]; l++) own[l] = r;
+  return own;
+});
+
+// Plain or status-classed code rows. `cls(l)` and `extra(l)` add per-line class / cells.
+function codeRow(no, html, cls = '', extra = '') {
+  return `<div class="ln ${cls}" data-l="${no}"><span class="no">${no}</span>${extra}<span class="src">${html || ' '}</span></div>`;
+}
+function bodyBlock(t) {
+  if (!t.body) return '<p class="mute">Test body not found.</p>';
+  const lines = highlight(t.body.source);
+  return `<div class="mute">${locLink(t.body.path, t.body.start)}${t.ambiguous ? ' · <b>ambiguous</b>: several functions matched this name' : ''}</div>
+    <div class="code tall">${lines.map((h, i) => codeRow(t.body.start + i, h)).join('')}</div>`;
+}
+// Runs of at least FOLD_MIN unshown lines collapse into a clickable row, keeping FOLD_CTX lines of context.
+const FOLD_MIN = 12, FOLD_CTX = 3;
+function foldedRows(n, shown, row) {
+  let html = '';
+  for (let l = 1; l <= n;) {
+    if (shown(l)) { html += row(l++); continue; }
+    let end = l;
+    while (end <= n && !shown(end)) end++;
+    const head = l === 1 ? 0 : FOLD_CTX, tail = end > n ? 0 : FOLD_CTX;
+    if (end - l >= FOLD_MIN) {
+      for (let k = l; k < l + head; k++) html += row(k);
+      html += `<div class="fold" data-a="${l + head}" data-b="${end - tail - 1}">⋯ ${end - l - head - tail} untouched lines</div>`;
+      for (let k = end - tail; k < end; k++) html += row(k);
+    } else {
+      for (let k = l; k < end; k++) html += row(k);
+    }
+    l = end;
+  }
+  return html;
+}
+
+// ---------- filters, sorting, filtered candidate list
+const filter = { kinds: new Set(KINDS), tier: '', verdict: '', module: '', q: '', minJ: meta.near_threshold ?? 0 };
+const sort = { key: 'kind', dir: 1 };
+const SORTS = {
+  kind: c => KINDS.indexOf(c.kind), test: c => T[c.test].id, other: c => T[c.other].id, tier: c => T[c.test].tier,
+  shared: c => c.shared, gap: c => c.gap, extra: c => c.extra, regions: c => T[c.test].regions,
+  jaccard: c => c.jaccard, verdict: c => VERDICT_RANK[verdictOf(c)?.verdict ?? ''],
+};
+let filteredCache = null, page = 0, includeReviewed = false;
+
+function filtered() {
+  if (filteredCache) return filteredCache;
+  const q = filter.q.trim().toLowerCase(), mods = filter.module ? moduleOf() : null;
+  const out = [];
+  C.forEach((c, ci) => {
+    if (!filter.kinds.has(c.kind)) return;
+    if (c.kind === 'near' && c.jaccard < filter.minJ) return;
+    if (filter.tier && T[c.test].tier !== filter.tier) return;
+    if (mods && mods[c.test] !== filter.module) return;
+    if (q && !T[c.test].id.toLowerCase().includes(q) && !T[c.other].id.toLowerCase().includes(q)) return;
+    if (filter.verdict) {
+      const v = verdictOf(c)?.verdict;
+      if (filter.verdict === 'none' ? v : filter.verdict === 'reviewed' ? !v : v !== filter.verdict) return;
+    }
+    out.push(ci);
+  });
+  const key = SORTS[sort.key];
+  out.sort((a, b) => {
+    const x = key(C[a]), y = key(C[b]);
+    return (x < y ? -1 : x > y ? 1 : 0) * sort.dir || C[a].gap - C[b].gap || a - b;
+  });
+  return (filteredCache = out);
+}
+
+function reviewPrompt(cis) {
+  const lines = [
+    `Review dead-weight test candidates in ${meta.repo}.`,
+    `Follow section "4. Review rules" of ${meta.skill_path}: read the candidate and the other test, compare assertions, decide cut, merge, or keep.`,
+    `For each candidate, append one JSON line to ${meta.verdicts_path}:`,
+    '{"test": "<candidate id>", "other": "<other id>", "verdict": "cut|merge|keep", "reason": "<one sentence naming the concrete assertion difference>"}',
+    'Do not edit tests.',
+    '',
+    'Candidates:',
+  ];
+  cis.forEach((ci, n) => {
+    const c = C[ci], t = T[c.test], o = T[c.other];
+    lines.push(`${n + 1}. [${c.kind}] ${t.id} (${loc(t)}) vs ${o.id} (${loc(o)}): shared ${c.shared} regions, other adds ${c.gap}, candidate adds ${c.extra}, Jaccard ${fmtJ(c.jaccard)}`);
+  });
+  return lines.join('\n');
+}
+const promptSelection = () => filtered().filter(ci => includeReviewed || !verdictOf(C[ci]));
+async function copyPrompt(cis) {
+  if (!cis.length) return toast('Nothing to copy: every selected candidate already has a verdict.');
+  const ok = await copyText(reviewPrompt(cis));
+  toast(ok ? `Copied review prompt for ${cis.length} candidate${cis.length > 1 ? 's' : ''}.` : 'Copy failed.');
+}
+
+// ---------- router: each view renders into <main>; `view` holds the rendered view's state
+const main = $('#view');
+let view = { name: null };
+function mount(name, html, state = {}) {
+  view.leave?.();
+  main.innerHTML = html;
+  view = { name, ...state };
+  window.scrollTo(0, 0);
+}
+function route() {
+  const [path, qs = ''] = location.hash.replace(/^#\/?/, '').split('?');
+  const [name, ...args] = path.split('/').filter(Boolean);
+  const render = VIEWS[name] ? name : 'overview';
+  $('#filters').hidden = render !== 'overview' && render !== 'graph';
+  document.querySelectorAll('header nav a').forEach(a => a.classList.toggle('on', a.dataset.view === render));
+  VIEWS[render](args, new URLSearchParams(qs));
+}
+function rerender() {
+  filteredCache = null;
+  view.leave?.();
+  view = { name: null };
+  route();
+}
+const notFound = what => mount('missing', `<section>${esc(what)} not found. <a href="#/overview">Back to overview</a></section>`);
+
+// ---------- overview
+function overview() {
+  const kinds = Object.fromEntries(KINDS.map(k => [k, 0]));
+  const vcount = { cut: 0, merge: 0, keep: 0, none: 0 };
+  for (const c of C) { kinds[c.kind]++; vcount[verdictOf(c)?.verdict ?? 'none']++; }
+  const unit = T.filter(t => t.tier === 'unit').length;
+  const covered = CL.reduce((n, cls) => n + cls.length, 0);
+  const cards = [
+    ['Tests', T.length], ['Unit', unit], ['Integration', T.length - unit], ['Regions', R.length], ['Covered regions', covered],
+    ['Files', F.length], ['Coverage classes', CL.length], ['Excluded test regions', meta.excluded_test_regions ?? 0],
+    ['Duplicate', kinds.duplicate], ['Subsumed', kinds.subsumed], [`Near (J ≥ ${meta.near_threshold})`, kinds.near],
+    ['Cut', vcount.cut], ['Merge', vcount.merge], ['Keep', vcount.keep], ['Unreviewed', vcount.none],
+    ['Skipped', meta.skipped?.length ?? 0], ['Empty', M.empty.length],
+  ];
+  const listCapped = (items, render) => items.slice(0, LIST_CAP).map(x => `<li>${render(x)}</li>`).join('')
+    + (items.length > LIST_CAP ? `<li class="mute">… ${num(items.length - LIST_CAP)} more</li>` : '');
+  const th = (key, label, cls = '') => `<th data-sort="${key}" class="${cls}">${label}</th>`;
+  mount('overview', `
+    <section><h2>Summary</h2>
+      <div class="cards">${cards.map(([k, v]) => `<div class="card"><b>${num(v)}</b><span>${esc(k)}</span></div>`).join('')}</div>
+      ${M.empty.length ? `<details><summary>Tests with no covered non-test regions (${num(M.empty.length)})</summary><ul>${listCapped(M.empty, testLink)}</ul></details>` : ''}
+      ${meta.skipped?.length ? `<details><summary>Skipped tests (${num(meta.skipped.length)})</summary><ul>${listCapped(meta.skipped, esc)}</ul></details>` : ''}
+    </section>
+    <section><h2>Modules <select id="tm-mode">
+        <option value="cand">colour: share of tests that are candidates</option>
+        <option value="verdict" ${verdicts.size ? 'selected' : ''}>colour: share of tests with a cut/merge verdict</option>
+      </select><span class="mute">size = tests · click a cell to filter by module</span></h2>
+      <div id="treemap"></div><div class="legend" id="tm-legend"></div>
+    </section>
+    <section><h2>Candidates <span id="tb-count" class="mute"></span>
+        <button id="copy-sel"></button><label><input type="checkbox" id="inc-rev" ${includeReviewed ? 'checked' : ''}> include reviewed</label></h2>
+      <table class="grid" id="cand"><thead><tr>
+        ${th('kind', 'Kind')}${th('test', 'Candidate')}${th('tier', 'Tier')}${th('other', 'Other')}
+        ${th('shared', 'Shared', 'num')}${th('gap', 'Gap', 'num')}${th('extra', 'Extra', 'num')}${th('regions', 'Regions', 'num')}
+        ${th('jaccard', 'Jaccard', 'num')}${th('verdict', 'Verdict')}
+      </tr></thead><tbody></tbody></table>
+      <div class="pager"></div>
+    </section>`);
+  $('#tm-mode').addEventListener('change', renderTreemap);
+  $('#cand thead').addEventListener('click', e => {
+    const key = e.target.closest('th[data-sort]')?.dataset.sort;
+    if (!key) return;
+    sort.dir = sort.key === key ? -sort.dir : 1;
+    sort.key = key;
+    filteredCache = null;
+    page = 0;
+    renderTable();
+  });
+  $('#cand tbody').addEventListener('click', e => {
+    const tr = e.target.closest('tr[data-ci]');
+    if (tr && !e.target.closest('a')) location.hash = `#/pair/${tr.dataset.ci}`;
+  });
+  main.querySelector('.pager').addEventListener('click', e => {
+    const step = +e.target.dataset.step || 0;
+    if (step) { page += step; renderTable(); }
+  });
+  $('#inc-rev').addEventListener('change', e => { includeReviewed = e.target.checked; renderTable(); });
+  $('#copy-sel').addEventListener('click', () => copyPrompt(promptSelection()));
+  renderTreemap();
+  renderTable();
+}
+
+function renderTable() {
+  const ids = filtered(), pages = Math.max(1, Math.ceil(ids.length / PAGE));
+  page = Math.max(0, Math.min(page, pages - 1));
+  $('#cand tbody').innerHTML = ids.slice(page * PAGE, (page + 1) * PAGE).map(ci => {
+    const c = C[ci], t = T[c.test];
+    return `<tr class="click" data-ci="${ci}"><td>${kindBadge(c.kind)}</td><td><div class="clip">${testLink(c.test)}</div></td><td>${t.tier}</td>
+      <td><div class="clip">${testLink(c.other)}</div></td><td class="num">${num(c.shared)}</td><td class="num">${num(c.gap)}</td>
+      <td class="num">${num(c.extra)}</td><td class="num">${num(t.regions)}</td><td class="num">${fmtJ(c.jaccard)}</td><td>${verdictBadge(verdictOf(c))}</td></tr>`;
+  }).join('') || '<tr><td colspan="10" class="mute">No candidates match the filters.</td></tr>';
+  main.querySelectorAll('#cand th[data-sort]').forEach(th => {
+    th.textContent = th.textContent.replace(/ [▲▼]$/, '') + (th.dataset.sort === sort.key ? (sort.dir > 0 ? ' ▲' : ' ▼') : '');
+  });
+  main.querySelector('.pager').innerHTML = `<button data-step="-1" ${page ? '' : 'disabled'}>‹ prev</button>
+    <span>page ${page + 1} / ${pages}</span><button data-step="1" ${page + 1 < pages ? '' : 'disabled'}>next ›</button>`;
+  $('#tb-count').textContent = `${num(ids.length)} of ${num(C.length)}`;
+  $('#copy-sel').textContent = `Copy review prompt (${num(promptSelection().length)})`;
+}
+
+function renderTreemap() {
+  const el = $('#treemap'), width = el.clientWidth || 900, height = 440;
+  const byVerdict = $('#tm-mode').value === 'verdict';
+  const hit = new Uint8Array(T.length);
+  for (const c of C) if (!byVerdict || ['cut', 'merge'].includes(verdictOf(c)?.verdict)) hit[c.test] = 1;
+  const groups = new Map(), mods = moduleOf();
+  T.forEach((t, ti) => {
+    let group = groups.get(t.binary_id);
+    if (!group) groups.set(t.binary_id, (group = new Map()));
+    let m = group.get(mods[ti]);
+    if (!m) group.set(mods[ti], (m = { key: mods[ti], name: mods[ti].slice(t.binary_id.length + 1) || '(top level)', tests: 0, hits: 0 }));
+    m.tests++;
+    m.hits += hit[ti];
+  });
+  const root = d3.hierarchy({ children: [...groups].map(([name, ms]) => ({ name, children: [...ms.values()] })) })
+    .sum(d => d.tests ?? 0).sort((a, b) => b.value - a.value);
+  d3.treemap().size([width, height]).round(true).paddingInner(1).paddingOuter(2).paddingTop(d => (d.depth === 1 ? 15 : 2))(root);
+  const share = d => d.data.hits / d.data.tests;
+  const maxShare = d3.max(root.leaves(), share) || 1;
+  const color = d3.scaleSequential(d3.interpolateYlOrRd).domain([0, maxShare]);
+  const fit = (text, w) => (text.length * 6 < w - 6 ? text : text.slice(0, Math.max(0, Math.floor((w - 12) / 6))) + '…');
+  const svg = d3.select(el).html('').append('svg').attr('width', width).attr('height', height);
+  const bins = svg.selectAll('g.binary').data(root.children ?? []).join('g').attr('class', 'binary');
+  bins.append('rect').attr('x', d => d.x0).attr('y', d => d.y0).attr('width', d => d.x1 - d.x0).attr('height', d => d.y1 - d.y0).attr('fill', '#e5e7eb');
+  bins.append('text').attr('class', 'bin').attr('x', d => d.x0 + 3).attr('y', d => d.y0 + 11).text(d => (d.x1 - d.x0 > 30 ? fit(d.data.name, d.x1 - d.x0) : ''));
+  const cells = svg.selectAll('g.cell').data(root.leaves()).join('g').attr('class', 'cell')
+    .attr('transform', d => `translate(${d.x0},${d.y0})`)
+    .on('click', (e, d) => { filter.module = filter.module === d.data.key ? '' : d.data.key; filtersChanged(); });
+  cells.append('rect').attr('width', d => d.x1 - d.x0).attr('height', d => d.y1 - d.y0).attr('fill', d => color(share(d)));
+  cells.append('title').text(d => `${d.data.key}\n${d.data.tests} tests · ${d.data.hits} ${byVerdict ? 'with cut/merge' : 'candidates'} (${Math.round(100 * share(d))}%)`);
+  cells.filter(d => d.x1 - d.x0 > 34 && d.y1 - d.y0 > 13).append('text').attr('x', 3).attr('y', 11).text(d => fit(d.data.name, d.x1 - d.x0));
+  $('#tm-legend').innerHTML = `<i style="background:${color(0)}"></i>0% <i style="background:${color(maxShare / 2)}"></i>${Math.round(50 * maxShare)}%
+    <i style="background:${color(maxShare)}"></i>${Math.round(100 * maxShare)}% of a module's tests ${byVerdict ? 'have a cut/merge verdict' : 'are candidates'}`;
+  markTreemap();
+}
+const markTreemap = () => d3.selectAll('#treemap g.cell').classed('sel', d => d.data.key === filter.module);
+
+// ---------- graph
+const GRAPH_STYLE = [
+  { selector: 'node', style: { label: 'data(label)', 'font-size': 9, 'text-valign': 'bottom', 'text-margin-y': 3, width: 16, height: 16, 'background-color': '#9ca3af', 'border-width': 1, 'border-color': '#374151' } },
+  { selector: 'node[tier = "integration"]', style: { shape: 'round-rectangle', width: 24, 'border-width': 3 } },
+  { selector: 'node[verdict = "cut"]', style: { 'background-color': '#dc2626' } },
+  { selector: 'node[verdict = "merge"]', style: { 'background-color': '#f59e0b' } },
+  { selector: 'node[verdict = "keep"]', style: { 'background-color': '#16a34a' } },
+  { selector: ':parent', style: { label: 'data(label)', shape: 'round-rectangle', 'text-valign': 'top', 'text-halign': 'center', 'font-size': 10, color: '#4b5563', 'background-color': '#f3f4f6', 'background-opacity': 0.7, 'border-width': 1, 'border-style': 'dashed', 'border-color': '#9ca3af', padding: 6 } },
+  // A collapsed file group is an ordinary node; its size grows with the number of tests it hides.
+  { selector: 'node.cy-expand-collapse-collapsed-node', style: { label: 'data(collapsedLabel)', 'text-wrap': 'wrap', 'text-max-width': 180, 'font-size': 10, shape: 'round-rectangle', width: 'data(size)', height: 'data(size)', 'background-color': '#e5e7eb', 'border-width': 1, 'border-style': 'dashed', 'border-color': '#6b7280' } },
+  { selector: 'node.cy-expand-collapse-collapsed-node[cuts > 0]', style: { 'background-color': '#fecaca', 'border-color': '#dc2626' } },
+  { selector: 'node:selected', style: { 'border-width': 3, 'border-color': '#2563eb' } },
+  { selector: 'node.match', style: { 'border-width': 3, 'border-color': '#7c3aed', 'font-weight': 'bold', 'font-size': 11 } },
+  { selector: 'edge', style: { width: 1.5, 'curve-style': 'bezier', 'line-color': '#6b7280', 'target-arrow-color': '#6b7280', 'target-arrow-shape': 'triangle', 'arrow-scale': 0.8, label: 'data(label)', 'font-size': 8, 'text-background-color': '#fff', 'text-background-opacity': 0.85, 'text-background-padding': 1 } },
+  // Cytoscape has no double line style: a white core with a dark outline draws as two parallel lines.
+  { selector: 'edge[kind = "duplicate"]', style: { width: 2.5, 'line-color': '#fff', 'line-outline-width': 1.5, 'line-outline-color': '#374151', 'target-arrow-color': '#374151' } },
+  { selector: 'edge[kind = "near"]', style: { 'line-style': 'dashed', 'line-color': '#2563eb', 'target-arrow-color': '#2563eb' } },
+  { selector: '.faded', style: { opacity: 0.12 } },
+  { selector: ':parent.faded', style: { opacity: 0.35 } },
+  // Edges rerouted to a collapsed group: keep them, but drop the per-pair label so the overview stays legible.
+  { selector: 'edge.via-group', style: { label: '', 'line-opacity': 0.45 } },
+];
+// Strongest verdict over every candidate pair where the test is the candidate (cut > merge > keep).
+function nodeVerdict(ti) {
+  let best = '';
+  for (const ci of candsAsTest().get(ti) ?? []) {
+    const v = verdictOf(C[ci])?.verdict ?? '';
+    if (VERDICT_RANK[v] > VERDICT_RANK[best]) best = v;
+  }
+  return best || 'none';
+}
+
+function graph() {
+  mount('graph', `<div class="graph-bar"><span id="g-note"></span>
+      <span class="legend">node: <i style="background:#dc2626"></i>cut <i style="background:#f59e0b"></i>merge <i style="background:#16a34a"></i>keep
+      <i style="background:#9ca3af"></i>none · ● unit, ▢ integration (thick border) · edges candidate → other: solid subsumed (+gap), double duplicate, dashed near (Jaccard)</span></div>
+    <div class="graph-tools">
+      <input type="search" id="g-find" placeholder="find test (Enter to focus)"> <span id="g-find-out" class="mute"></span>
+      <button class="btn" id="g-fit-sel">Fit selection</button> <button class="btn" id="g-fit">Fit all</button>
+      <button class="btn" id="g-collapse">Collapse files</button> <button class="btn" id="g-expand">Expand files</button>
+      <span class="mute">hover: neighbours · click: show code · shift-drag: box select · double-click: open test or pair page, or toggle a file group</span>
+    </div>
+    <div class="graph-wrap"><div id="cy"></div><aside id="g-detail" hidden></aside><div id="cy-nav"></div></div>`, { leave: destroyGraph });
+  $('#g-find').addEventListener('keydown', e => { if (e.key === 'Enter') focusMatches(e.target.value); });
+  $('#g-fit-sel').onclick = () => fitTo(view.cy?.$(':selected'));
+  $('#g-fit').onclick = () => fitTo();
+  $('#g-collapse').onclick = () => view.ec?.collapseAll();
+  $('#g-expand').onclick = () => view.ec?.expandAll();
+  renderGraph();
+}
+
+function destroyGraph() {
+  view.nav?.destroy();
+  view.cy?.destroy();
+  view.nav = view.cy = view.ec = null;
+}
+
+// Layout: ELK packs the file groups like boxes (root algorithm `box`) and lays out the tests inside each
+// group left to right (`layered`). Collapsed groups are plain nodes, so they are packed too.
+function runLayout() {
+  const cy = view.cy;
+  const groupCls = 'cy-expand-collapse-collapsed-node';
+  cy.edges().forEach(e => { e.toggleClass('via-group', e.source().hasClass(groupCls) || e.target().hasClass(groupCls)); });
+  const layout = cy.layout({
+    name: 'elk', nodeDimensionsIncludeLabels: true, fit: false, animate: false,
+    elk: { algorithm: 'box', 'elk.aspectRatio': cy.width() / cy.height(), 'elk.spacing.nodeNode': 36, 'elk.padding': '[top=30,left=20,bottom=20,right=20]' },
+    nodeLayoutOptions: node => node.isParent()
+      ? { 'elk.algorithm': 'layered', 'elk.direction': 'RIGHT', 'elk.spacing.nodeNode': 14, 'elk.layered.spacing.nodeNodeBetweenLayers': 60, 'elk.padding': '[top=22,left=10,bottom=10,right=10]' }
+      : undefined,
+  });
+  // expand-collapse may call this layout later than the expand/collapse call returns, so callers that
+  // must wait for final positions (search focus, group toggle) leave a callback in view.afterLayout.
+  layout.promiseOn('layoutstop').then(() => {
+    const next = view.afterLayout;
+    view.afterLayout = null;
+    next ? next() : fitTo(null, false);
+  });
+  layout.run();
+}
+
+// Fit the given elements (or everything), but never below a zoom where labels stay readable.
+function fitTo(eles, animate = true) {
+  const cy = view.cy;
+  if (!cy) return;
+  const target = eles?.nonempty() ? eles : cy.elements();
+  const MIN_READABLE = 0.45, MAX_FOCUS = 1.5;
+  const bb = target.boundingBox();
+  const zoom = Math.min(MAX_FOCUS, Math.max(MIN_READABLE, Math.min((cy.width() - 60) / bb.w, (cy.height() - 60) / bb.h)));
+  // Too big to fit at a readable zoom: anchor at the top-left instead of the centre.
+  const pan = {
+    x: bb.w * zoom < cy.width() ? (cy.width() - bb.w * zoom) / 2 - bb.x1 * zoom : 30 - bb.x1 * zoom,
+    y: bb.h * zoom < cy.height() ? (cy.height() - bb.h * zoom) / 2 - bb.y1 * zoom : 30 - bb.y1 * zoom,
+  };
+  animate ? cy.animate({ zoom, pan }, { duration: 300 }) : cy.viewport({ zoom, pan });
+}
+
+// Hover: fade everything except the hovered element, its edges, its neighbours, and their file groups.
+// (Not named `highlight`: that is the syntax highlighter every code view uses.)
+function fadeExcept(ele) {
+  const cy = view.cy;
+  const keep = ele.isEdge() ? ele.union(ele.connectedNodes()) : ele.closedNeighborhood();
+  cy.batch(() => {
+    cy.elements().addClass('faded');
+    keep.union(keep.nodes().ancestors()).removeClass('faded');
+  });
+}
+const clearFade = () => view.cy?.batch(() => view.cy.elements().removeClass('faded'));
+
+// Code panel: a clicked test shows its body; a clicked edge shows the candidate and the other test.
+function showDetail(html) {
+  const panel = $('#g-detail');
+  panel.innerHTML = `<button class="btn close" title="Close">×</button>${html}`;
+  panel.querySelector('.close').onclick = hideDetail;
+  panel.hidden = false;
+  panel.scrollTop = 0;
+}
+function hideDetail() { const panel = $('#g-detail'); if (panel) panel.hidden = true; }
+const testDetail = ti => `<h3>${testLink(ti)}</h3>
+  <div class="mute">${T[ti].tier} · ${num(T[ti].regions)} regions · <a href="#/test/${ti}">open test page →</a></div>${bodyBlock(T[ti])}`;
+function pairDetail(ci) {
+  const c = C[ci], v = verdictOf(c);
+  return `<div>${kindBadge(c.kind)} ${verdictBadge(v)} shared <b>${num(c.shared)}</b> · gap <b>${num(c.gap)}</b> · extra <b>${num(c.extra)}</b> · Jaccard <b>${fmtJ(c.jaccard)}</b>
+    · <a href="#/pair/${ci}">open pair page →</a></div>${v ? `<p><b>${esc(v.verdict)}</b>: ${esc(v.reason)}</p>` : ''}
+    <h3>Candidate</h3>${testDetail(c.test)}<h3>${OTHER_ROLE[c.kind]}</h3>${testDetail(c.other)}`;
+}
+
+// Search to focus: expand the file groups that hide a match, then select and fit the matches.
+function focusMatches(query) {
+  const cy = view.cy, ec = view.ec, q = query.trim().toLowerCase();
+  if (!cy) return;
+  cy.nodes().removeClass('match');
+  if (!q) { $('#g-find-out').textContent = ''; return; }
+  const hits = ti => T[ti].id.toLowerCase().includes(q);
+  const finish = () => {
+    const matches = cy.nodes('[ti]').filter(n => hits(n.data('ti')));
+    $('#g-find-out').textContent = matches.empty() ? 'no match in the graph' : `${num(matches.length)} match${matches.length === 1 ? '' : 'es'}`;
+    cy.elements().unselect();
+    matches.addClass('match').select();
+    fitTo(matches);
+  };
+  const hidden = cy.nodes('.cy-expand-collapse-collapsed-node')
+    .filter(group => ec.getCollapsedChildrenRecursively(group).nodes('[ti]').some(n => hits(n.data('ti'))));
+  if (hidden.empty()) return finish();
+  view.afterLayout = finish;
+  ec.expand(hidden);
+}
+
+function renderGraph() {
+  const nodes = new Set(), edges = [], ids = filtered();
+  // Walk the filtered (sorted) list and keep every edge whose endpoints still fit under the node cap.
+  for (const ci of ids) {
+    const c = C[ci], need = !nodes.has(c.test) + !nodes.has(c.other);
+    if (nodes.size + need > GRAPH_CAP) continue;
+    nodes.add(c.test);
+    nodes.add(c.other);
+    edges.push(ci);
+  }
+  const fileOf = ti => T[ti].location?.replace(/:\d+$/, '') ?? '(location unknown)';
+  const groups = new Map();
+  for (const ti of nodes) {
+    const g = groups.get(fileOf(ti)) ?? { tests: 0, cuts: 0 };
+    g.tests++;
+    if (nodeVerdict(ti) === 'cut') g.cuts++;
+    groups.set(fileOf(ti), g);
+  }
+  const elements = [
+    ...[...groups].map(([path, g]) => ({ data: {
+      id: 'f:' + path, label: path, cuts: g.cuts, size: Math.round(20 + 6 * Math.sqrt(g.tests)),
+      collapsedLabel: `${path.split('/').pop()}\n${g.tests} tests${g.cuts ? `, ${g.cuts} cut` : ''}`,
+    } })),
+    ...[...nodes].map(ti => ({ data: { id: 't' + ti, ti, parent: 'f:' + fileOf(ti), label: short(T[ti]), tier: T[ti].tier, verdict: nodeVerdict(ti) } })),
+    ...edges.map(ci => {
+      const c = C[ci];
+      return { data: { id: 'c' + ci, ci, source: 't' + c.test, target: 't' + c.other, kind: c.kind, label: c.kind === 'subsumed' ? `+${c.gap}` : c.kind === 'near' ? fmtJ(c.jaccard) : '' } };
+    }),
+  ];
+  const collapsed = nodes.size > COLLAPSE_AT;
+  $('#g-note').innerHTML = (edges.length < ids.length
+    ? `<span class="notice">Showing ${num(edges.length)} of ${num(ids.length)} candidates (${GRAPH_CAP}-node cap). Narrow the filters to see the rest.</span>`
+    : `${num(edges.length)} candidates, ${num(nodes.size)} tests in ${num(groups.size)} files`)
+    + (collapsed ? ' · file groups start collapsed: double-click one to open it' : '');
+  destroyGraph();
+  const cy = (view.cy = cytoscape({ container: $('#cy'), elements, style: GRAPH_STYLE, minZoom: 0.05, maxZoom: 4, boxSelectionEnabled: true, layout: { name: 'preset' } }));
+  view.ec = cy.expandCollapse({ layoutBy: runLayout, fisheye: false, animate: false, undoable: false, cueEnabled: true, expandCollapseCuePosition: 'top-left' });
+  collapsed ? view.ec.collapseAll() : runLayout();
+  // cytoscape-navigator only accepts a selector string; an element makes it append its own panel to <body>.
+  view.nav = cy.navigator({ container: '#cy-nav', viewLiveFramerate: 0, thumbnailEventFramerate: 30, thumbnailLiveFramerate: false, dblClickDelay: 200, removeCustomContainer: false, rerenderDelay: 100 });
+
+  cy.on('dbltap', 'node', e => {
+    const n = e.target;
+    if (n.hasClass('cy-expand-collapse-collapsed-node')) {
+      // Keep the view on the group that just opened instead of jumping back to the whole graph.
+      const id = n.id();
+      view.afterLayout = () => { const g = view.cy.getElementById(id); fitTo(g.union(g.descendants()), false); };
+      view.ec.expand(n);
+    } else if (n.isParent()) view.ec.collapse(n);
+    else location.hash = `#/test/${n.data('ti')}`;
+  });
+  cy.on('dbltap', 'edge[ci]', e => { location.hash = `#/pair/${e.target.data('ci')}`; });
+  cy.on('tap', 'node[ti]', e => showDetail(testDetail(e.target.data('ti'))));
+  cy.on('tap', 'edge[ci]', e => showDetail(pairDetail(e.target.data('ci'))));
+  cy.on('tap', e => { if (e.target === cy) hideDetail(); });
+  cy.on('mouseover', 'node[ti], node.cy-expand-collapse-collapsed-node', e => {
+    fadeExcept(e.target);
+    const ti = e.target.data('ti');
+    showTip(e.originalEvent, ti === undefined ? e.target.data('label') : T[ti].id);
+  });
+  cy.on('mouseover', 'edge[ci]', e => {
+    fadeExcept(e.target);
+    const c = C[e.target.data('ci')];
+    showTip(e.originalEvent, `[${c.kind}] shared ${c.shared}, gap ${c.gap}, extra ${c.extra}, Jaccard ${fmtJ(c.jaccard)}`);
+  });
+  cy.on('mouseout', 'node, edge', () => { clearFade(); hideTip(); });
+}
+
+// ---------- pair view
+function pair([ciArg], q) {
+  const ci = Number(ciArg), c = C[ci];
+  if (!c) return notFound(`Candidate ${ciArg}`);
+  const fileArg = q.get('f');
+  if (view.name === 'pair' && view.ci === ci) return showPairFile(fileArg);
+  // mark[r]: bit 1 = candidate covers region r, bit 2 = other covers it.
+  const mark = new Uint8Array(R.length), mine = regionsOf(c.test), theirs = regionsOf(c.other);
+  for (const r of mine) mark[r] |= 1;
+  for (const r of theirs) mark[r] |= 2;
+  const perFile = new Map(); // fid -> [, test-only, other-only, both]
+  const bump = r => { const f = R[r][0]; let n = perFile.get(f); if (!n) perFile.set(f, (n = [0, 0, 0, 0])); n[mark[r]]++; };
+  mine.forEach(bump);
+  for (const r of theirs) if (mark[r] === 2) bump(r);
+  const files = [...perFile].sort((a, b) => b[1][1] + b[1][2] - a[1][1] - a[1][2] || b[1][3] - a[1][3]);
+  const v = verdictOf(c), role = OTHER_ROLE[c.kind];
+  const side = (ti, label) => `<div><h3>${label}: ${testLink(ti)}</h3>
+    <div class="mute">${T[ti].tier} · ${num(T[ti].regions)} regions${T[ti].body ? '' : ` · ${testLocLink(T[ti])}`}</div>${bodyBlock(T[ti])}</div>`;
+  mount('pair', `
+    <section>
+      <h2>${kindBadge(c.kind)} candidate #${ci} ${verdictBadge(v)}</h2>
+      <div class="row">
+        <span>shared <b>${num(c.shared)}</b></span><span>gap (${role} only) <b>${num(c.gap)}</b></span>
+        <span>extra (candidate only) <b>${num(c.extra)}</b></span><span>Jaccard <b>${fmtJ(c.jaccard)}</b></span>
+        ${c.kind === 'near' ? '' : `<span>${c.kind === 'duplicate' ? 'group size − 1' : 'strict supersets'} <b>${num(c.supersets)}</b></span>`}
+      </div>
+      ${v ? `<p><b>${esc(v.verdict)}</b>: ${esc(v.reason ?? '')}</p>` : ''}
+      <div class="row" style="margin-top:8px">
+        <a class="btn" href="#/test/${c.test}">Open candidate</a><a class="btn" href="#/test/${c.other}">Open ${role}</a>
+        <button id="copy-one">Copy review prompt</button>
+      </div>
+    </section>
+    <section class="split">${side(c.test, 'Candidate')}${side(c.other, role[0].toUpperCase() + role.slice(1))}</section>
+    <section><h2>Production files touched (${num(files.length)})</h2>
+      <table class="grid" id="pair-files"><thead><tr><th>File</th><th class="num">Both</th><th class="num">${role} only</th><th class="num">Candidate only</th></tr></thead>
+      <tbody>${files.map(([f, n]) => `<tr class="click" data-f="${f}"><td><code>${esc(F[f].path)}</code></td><td class="num">${num(n[3])}</td><td class="num">${num(n[2])}</td><td class="num">${num(n[1])}</td></tr>`).join('')}</tbody></table>
+      <div id="pair-src"></div>
+    </section>`, { ci, mark, defaultFile: files[0]?.[0] });
+  $('#copy-one').addEventListener('click', () => copyPrompt([ci]));
+  $('#pair-files tbody').addEventListener('click', e => {
+    const tr = e.target.closest('tr[data-f]');
+    if (tr) location.hash = `#/pair/${ci}?f=${tr.dataset.f}`;
+  });
+  showPairFile(fileArg);
+}
+
+function showPairFile(fileArg) {
+  const fid = fileArg == null ? view.defaultFile : Number(fileArg), el = $('#pair-src');
+  main.querySelectorAll('#pair-files tr[data-f]').forEach(tr => tr.classList.toggle('on', Number(tr.dataset.f) === fid));
+  if (fid == null || !F[fid]) { el.innerHTML = ''; return; }
+  const lines = sourceLines(fid), own = owners(fid), mark = view.mark, role = OTHER_ROLE[C[view.ci].kind];
+  const head = `<h3><a href="#/file/${fid}">${esc(F[fid].path)}</a></h3>
+    <div class="legend"><i style="background:#3b82f6"></i>both <i style="background:#f97316"></i>${role} only <i style="background:#22c55e"></i>candidate only
+    <i style="background:#fca5a5"></i>instrumented, covered by neither <i style="background:#fafafa"></i>not instrumented · hover a line for its owner region</div>`;
+  if (!lines) { el.innerHTML = head + '<p class="mute">Source unavailable.</p>'; return; }
+  const status = l => (own[l] >= 0 ? mark[own[l]] : -1); // -1 not instrumented, 0 neither, 1 candidate, 2 other, 3 both
+  const CLS = ['', 'u', 't', 'o', 'b'];
+  const row = l => codeRow(l, lines[l - 1], CLS[status(l) + 1]);
+  el.innerHTML = head + `<div class="code tall">${foldedRows(lines.length, l => status(l) > 0, row)}</div>`;
+  const box = el.querySelector('.code');
+  box._row = row;
+  box._tip = l => {
+    const r = own[l];
+    if (r < 0) return `line ${l}: not instrumented`;
+    return `line ${l} · owner region #${r} (${regionSpan(r)})\ncandidate ${mark[r] & 1 ? '✓ covers' : '✗ misses'} · ${role} ${mark[r] & 2 ? '✓ covers' : '✗ misses'}`;
+  };
+}
+
+// ---------- file view
+function file([fidArg, lineArg], q) {
+  const fid = Number(fidArg), line = lineArg ? Number(lineArg) : null, ti = q.has('t') ? Number(q.get('t')) : null;
+  if (!F[fid]) return notFound(`File ${fidArg}`);
+  if (ti != null && !T[ti]) return notFound(`Test ${ti}`);
+  if (view.name === 'file' && view.fid === fid && view.ti === ti) return selectLine(line, false);
+  const lines = sourceLines(fid), own = owners(fid), rc = regionClass(), tests = classTests();
+  const rs = fileRegions()(fid);
+  // Totals: covered regions and the union of tests touching any region of this file.
+  const touching = new Uint8Array(T.length), seenClass = new Set();
+  let coveredRegions = 0;
+  for (const r of rs) {
+    const cls = rc[r];
+    if (cls < 0) continue;
+    coveredRegions++;
+    if (seenClass.has(cls)) continue;
+    seenClass.add(cls);
+    for (const t of tests(cls)) touching[t] = 1;
+  }
+  const lineCount = lines ? lines.length : 0;
+  const count = l => (own[l] >= 0 ? testsOfRegion(own[l]).length : 0);
+  let instrumented = 0, coveredLines = 0, max = 0;
+  for (let l = 1; l <= lineCount; l++) {
+    if (own[l] < 0) continue;
+    instrumented++;
+    const n = count(l);
+    if (n) coveredLines++;
+    if (n > max) max = n;
+  }
+  let hitMark = null;
+  if (ti != null) { hitMark = new Uint8Array(R.length); for (const r of regionsOf(ti)) hitMark[r] = 1; }
+  const touchCount = touching.reduce((a, b) => a + b, 0);
+  mount('file', `
+    <section><h2><code>${esc(F[fid].path)}</code></h2>
+      <div class="row"><span>lines <b>${num(lineCount)}</b></span><span>instrumented <b>${num(instrumented)}</b></span>
+        <span>covered lines <b>${num(coveredLines)}</b></span><span>regions <b>${num(rs.length)}</b></span>
+        <span>covered regions <b>${num(coveredRegions)}</b></span><span>tests touching <b>${num(touchCount)}</b></span></div>
+      ${ti != null ? `<p>Highlighting lines covered by ${testLink(ti)} · <a href="#/file/${fid}">clear</a></p>` : ''}
+      <div class="legend">heat = tests covering the line's owner region (log scale, max ${num(max)}) <i style="background:#fee2e2"></i>instrumented, uncovered
+        ${ti != null ? '<i style="background:#10b981"></i>covered by the selected test' : ''} · click a line to list its tests</div>
+    </section>
+    <div class="side"><div class="code tall file"></div><aside><section id="line-tests"></section></aside></div>`, { fid, ti });
+  const box = main.querySelector('.code.file');
+  if (!lines) box.innerHTML = '<p class="mute">Source unavailable.</p>';
+  else {
+    const scale = Math.log1p(max) || 1;
+    box.innerHTML = lines.map((html, i) => {
+      const l = i + 1, r = own[l], n = count(l);
+      const cls = (r >= 0 && !n ? 'u' : '') + (hitMark && r >= 0 && hitMark[r] ? ' hit' : '');
+      const heat = `<span class="heat">${n ? `<i style="width:${Math.max(4, (100 * Math.log1p(n)) / scale)}%"></i>` : ''}</span>`;
+      return codeRow(l, html, cls, heat);
+    }).join('');
+  }
+  box._tip = l => (own[l] < 0 ? `line ${l}: not instrumented` : `line ${l} · owner region #${own[l]} (${regionSpan(own[l])}) · ${num(count(l))} tests`);
+  box.addEventListener('click', e => {
+    const ln = e.target.closest('.ln');
+    if (ln) location.hash = `#/file/${fid}/${ln.dataset.l}${ti != null ? `?t=${ti}` : ''}`;
+  });
+  selectLine(line ?? (ti != null ? box.querySelector('.ln.hit')?.dataset.l : null), true);
+}
+
+function selectLine(line, scroll) {
+  const box = main.querySelector('.code.file'), panel = $('#line-tests');
+  box.querySelector('.ln.sel')?.classList.remove('sel');
+  const l = Number(line), ln = line != null ? box.querySelector(`.ln[data-l="${l}"]`) : null;
+  if (!ln) { panel.innerHTML = '<p class="mute">Click a line to list the tests covering it.</p>'; return; }
+  ln.classList.add('sel');
+  if (scroll) ln.scrollIntoView({ block: 'center' });
+  const r = owners(view.fid)[l];
+  if (r < 0) { panel.innerHTML = `<h3>Line ${l}</h3><p class="mute">Not instrumented.</p>`; return; }
+  const tests = Array.from(testsOfRegion(r)).sort((a, b) => T[a].regions - T[b].regions);
+  panel.innerHTML = `<h3>Line ${l} · region #${r} (${regionSpan(r)})</h3>
+    <p class="mute">${num(tests.length)} tests cover the owner region${tests.length > LIST_CAP ? `; showing the ${LIST_CAP} smallest` : ''}.</p>
+    <ul>${tests.slice(0, LIST_CAP).map(t => `<li>${testLink(t)} <span class="mute">${T[t].tier}, ${num(T[t].regions)} regions</span></li>`).join('')}</ul>`;
+}
+
+// ---------- test view
+let upsetSel = [];
+const upsetBox = ti => `<input type="checkbox" class="upsel" data-ti="${ti}" title="add to UpSet plot" ${upsetSel.includes(ti) ? 'checked' : ''}>`;
+
+function test([tiArg]) {
+  const ti = Number(tiArg), t = T[ti];
+  if (!t) return notFound(`Test ${tiArg}`);
+  const files = [...regionsByFile(regionsOf(ti))].sort((a, b) => b[1] - a[1]);
+  const asTest = candsAsTest().get(ti) ?? [], asOther = candsAsOther().get(ti) ?? [];
+  const relTable = (cis, peer, title) => {
+    if (!cis.length) return `<h3>${title} (0)</h3>`;
+    const rows = cis.slice(0, LIST_CAP).map(ci => {
+      const c = C[ci], p = c[peer];
+      return `<tr><td>${upsetBox(p)}</td><td>${kindBadge(c.kind)}</td><td><div class="clip">${testLink(p)}</div></td><td class="num">${num(c.shared)}</td>
+        <td class="num">${num(c.gap)}</td><td class="num">${num(c.extra)}</td><td class="num">${fmtJ(c.jaccard)}</td><td>${verdictBadge(verdictOf(c))}</td><td><a href="#/pair/${ci}">pair →</a></td></tr>`;
+    }).join('');
+    return `<h3>${title} (${num(cis.length)}${cis.length > LIST_CAP ? `, showing ${LIST_CAP}` : ''})</h3>
+      <table class="grid"><thead><tr><th>UpSet</th><th>Kind</th><th>Test</th><th class="num">Shared</th><th class="num">Gap</th><th class="num">Extra</th><th class="num">Jaccard</th><th>Verdict</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+  };
+  mount('test', `
+    <section><h2>${esc(t.id)} <label class="mute">${upsetBox(ti)} add to UpSet</label></h2>
+      <dl class="info"><dt>Tier</dt><dd>${t.tier}</dd><dt>Location</dt><dd>${testLocLink(t)}</dd>
+        <dt>Regions</dt><dd>${num(t.regions)} in ${num(t.classes.length)} coverage classes</dd><dt>Processes</dt><dd>${t.processes}</dd>
+        ${t.ambiguous ? '<dt>Ambiguous</dt><dd>several functions matched this name</dd>' : ''}</dl>
+      <h3>Body</h3>${bodyBlock(t)}
+    </section>
+    <section><h2>Production files touched (${num(files.length)})</h2>
+      <table class="grid"><thead><tr><th>File</th><th class="num">Regions</th></tr></thead><tbody>
+      ${files.map(([f, n]) => `<tr><td><a href="#/file/${f}?t=${ti}"><code>${esc(F[f].path)}</code></a></td><td class="num">${num(n)}</td></tr>`).join('')}</tbody></table>
+    </section>
+    <section><h2>Relations</h2>
+      ${relTable(asTest, 'other', 'As candidate (other = keeper / witness / near twin)')}
+      ${relTable(asOther, 'test', 'As keeper / witness / near twin of')}
+    </section>
+    <section><h2>UpSet: region overlap of selected tests <span class="mute">(up to ${UPSET_MAX})</span></h2>
+      <div id="upset-chips" class="row"></div><div id="upset-plot"></div>
+    </section>`, { ti });
+  renderUpset();
+}
+
+function toggleUpset(ti, on) {
+  if (on && !upsetSel.includes(ti)) {
+    if (upsetSel.length >= UPSET_MAX) toast(`UpSet holds at most ${UPSET_MAX} tests.`);
+    else upsetSel.push(ti);
+  } else if (!on) upsetSel = upsetSel.filter(x => x !== ti);
+  main.querySelectorAll('input.upsel').forEach(box => { box.checked = upsetSel.includes(Number(box.dataset.ti)); });
+  renderUpset();
+}
+
+function renderUpset() {
+  const chips = $('#upset-chips'), plot = $('#upset-plot');
+  const names = upsetSel.map((ti, k) => `${k + 1}. ${T[ti].name.split('::').pop()}`);
+  chips.innerHTML = upsetSel.map((ti, k) => `<span class="chip">${k + 1}. ${testLink(ti)}<button data-rm="${ti}" title="remove">×</button></span>`).join('');
+  if (upsetSel.length < 2) {
+    plot.innerHTML = '<p class="mute">Tick at least two tests (this one or related tests) to compare their region sets.</p>';
+    return;
+  }
+  // Render into a fresh host each time; the plot area may have held the placeholder text.
+  plot.innerHTML = '<div></div>';
+  // Each element is a region id; its sets are the selected tests covering it.
+  const member = new Map();
+  upsetSel.forEach((ti, k) => {
+    for (const r of regionsOf(ti)) {
+      const sets = member.get(r);
+      sets ? sets.push(names[k]) : member.set(r, [names[k]]);
+    }
+  });
+  const { sets, combinations } = UpSetJS.extractCombinations([...member.keys()], r => member.get(r), { type: 'distinctIntersection' });
+  UpSetJS.render(plot.firstChild, { sets, combinations, width: plot.clientWidth || 900, height: 320 + 18 * upsetSel.length, widthRatios: [0.15, 0.25] });
+}
+
+// ---------- global wiring
+const VIEWS = { overview, graph, pair, file, test };
+
+function filtersChanged() {
+  filteredCache = null;
+  page = 0;
+  $('#f-module').innerHTML = filter.module ? `<span class="chip">module: ${esc(filter.module)}<button id="f-module-clear" title="clear">×</button></span>` : '';
+  $('#f-count').textContent = `${num(filtered().length)} of ${num(C.length)} candidates`;
+  if (view.name === 'overview') { renderTable(); markTreemap(); }
+  else if (view.name === 'graph') renderGraph();
+}
+function debounce(fn, ms) {
+  let timer;
+  return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), ms); };
+}
+
+function initFilters() {
+  const slider = $('#f-j'), out = $('#f-j-out');
+  const nearMin = C.reduce((m, c) => (c.kind === 'near' ? Math.min(m, c.jaccard) : m), filter.minJ);
+  slider.min = String(Math.floor(nearMin * 100) / 100);
+  slider.value = String(filter.minJ);
+  out.textContent = fmtJ(filter.minJ);
+  const applyJ = debounce(() => { filter.minJ = Number(slider.value); filtersChanged(); }, 120);
+  slider.addEventListener('input', () => { out.textContent = fmtJ(Number(slider.value)); applyJ(); });
+  document.querySelectorAll('#filters input[data-kind]').forEach(box => box.addEventListener('change', () => {
+    box.checked ? filter.kinds.add(box.dataset.kind) : filter.kinds.delete(box.dataset.kind);
+    filtersChanged();
+  }));
+  $('#f-tier').addEventListener('change', e => { filter.tier = e.target.value; filtersChanged(); });
+  $('#f-verdict').addEventListener('change', e => { filter.verdict = e.target.value; filtersChanged(); });
+  $('#f-q').addEventListener('input', debounce(e => { filter.q = e.target.value; filtersChanged(); }, 150));
+  $('#f-module').addEventListener('click', e => {
+    if (e.target.id === 'f-module-clear') { filter.module = ''; filtersChanged(); }
+  });
+  $('#f-count').textContent = `${num(filtered().length)} of ${num(C.length)} candidates`;
+}
+
+function updateVerdictStatus() {
+  $('#verdict-status').textContent = `${num(verdicts.size)} verdict${verdicts.size === 1 ? '' : 's'}`;
+}
+
+$('#verdict-file').addEventListener('change', async e => {
+  const input = e.target, text = await input.files[0]?.text();
+  input.value = '';
+  if (text == null) return;
+  const records = text.split('\n').filter(line => line.trim()).map(line => {
+    try { return JSON.parse(line); } catch { return null; }
+  });
+  const added = addVerdicts(records), skipped = records.length - added;
+  updateVerdictStatus();
+  toast(`Loaded ${added} verdicts${skipped ? `, skipped ${skipped} invalid line${skipped > 1 ? 's' : ''}` : ''}.`);
+  rerender();
+});
+
+// Line tooltips for code views that define box._tip(line); folded runs expand via box._row(line).
+const tip = $('#tip');
+function showTip(event, text) {
+  tip.textContent = text;
+  tip.hidden = false;
+  const x = event?.clientX ?? 0, y = event?.clientY ?? 0;
+  tip.style.left = `${Math.min(x + 14, window.innerWidth - tip.offsetWidth - 8)}px`;
+  tip.style.top = `${y + 16}px`;
+}
+function hideTip() { tip.hidden = true; }
+main.addEventListener('mouseover', e => {
+  const ln = e.target.closest('.ln'), box = ln?.closest('.code');
+  box?._tip ? showTip(e, box._tip(Number(ln.dataset.l))) : hideTip();
+});
+main.addEventListener('mouseleave', hideTip);
+main.addEventListener('click', e => {
+  const fold = e.target.closest('.fold');
+  if (fold) {
+    const box = fold.closest('.code');
+    let html = '';
+    for (let l = Number(fold.dataset.a); l <= Number(fold.dataset.b); l++) html += box._row(l);
+    fold.outerHTML = html;
+  }
+  const rm = e.target.dataset?.rm;
+  if (rm != null) toggleUpset(Number(rm), false);
+});
+main.addEventListener('change', e => {
+  if (e.target.matches('input.upsel')) toggleUpset(Number(e.target.dataset.ti), e.target.checked);
+});
+
+$('#meta').textContent = `${meta.repo} · generated ${meta.generated}`;
+updateVerdictStatus();
+initFilters();
+window.addEventListener('hashchange', route);
+route();
+</script>
+</body>
+</html>

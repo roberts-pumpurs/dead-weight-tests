@@ -1,0 +1,55 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v5
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  publish:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.release-please.outputs.tag_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+      - name: Attach the skill archive to the release
+        run: |
+          tar -czf "dead-weight-tests-$TAG.tar.gz" -C skills dead-weight-tests
+          gh release upload "$TAG" "dead-weight-tests-$TAG.tar.gz" --clobber
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      # skills.sh has no upload step: it lists public GitHub repos from `skills add` install telemetry.
+      # This install is the release smoke test, and it is the event that lists the release on skills.sh.
+      - name: Install from GitHub with the skills CLI
+        run: |
+          cd "$(mktemp -d)"
+          npx -y skills@1.7.0 add "$GITHUB_REPOSITORY" --skill dead-weight-tests --agent claude-code --yes
+          grep -q "version: \"${TAG#v}\"" .claude/skills/dead-weight-tests/SKILL.md
+      - name: Install from the release archive
+        run: |
+          cd "$(mktemp -d)"
+          DISABLE_TELEMETRY=1 npx -y skills@1.7.0 add \
+            "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/dead-weight-tests-$TAG.tar.gz" \
+            --agent claude-code --yes
+          test -f .claude/skills/dead-weight-tests/scripts/analyze.py
