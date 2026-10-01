@@ -58,6 +58,8 @@ cd tests/fixture && ../../skills/dead-weight-tests/scripts/collect.sh -- --works
 
 Releases use [release-please](https://github.com/googleapis/release-please) and Conventional Commits. Merging the release PR tags the version, attaches a skill archive to the GitHub release, and installs the skill from GitHub with the skills CLI as a smoke test. skills.sh has no upload step: it lists public repositories from that install telemetry.
 
+Branch rules for `main` live in [`.github/rulesets/main.json`](.github/rulesets/main.json): squash-merged PRs only, both CI jobs green, signed commits, no force pushes or deletion; repository admins can bypass. The `Rulesets` workflow applies the file when it changes. It needs a `RULESETS_TOKEN` secret, a fine-grained token for this repository with "Administration: Read and write".
+
 ## License
 
 MIT

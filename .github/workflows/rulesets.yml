@@ -1,0 +1,40 @@
+name: Rulesets
+
+# Applies .github/rulesets/*.json to this repository, matching rulesets by name.
+# GITHUB_TOKEN cannot manage rulesets, so this needs a RULESETS_TOKEN secret:
+# a fine-grained token for this repository with "Administration: Read and write".
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/rulesets/**"
+      - ".github/workflows/rulesets.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Apply rulesets
+        env:
+          GH_TOKEN: ${{ secrets.RULESETS_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::RULESETS_TOKEN is not set, so the rulesets were not applied."
+            exit 0
+          fi
+          for file in .github/rulesets/*.json; do
+            name="$(jq -r .name "$file")"
+            id="$(gh api "repos/$GITHUB_REPOSITORY/rulesets" --jq ".[] | select(.name == \"$name\") | .id")"
+            if [ -n "$id" ]; then
+              gh api -X PUT "repos/$GITHUB_REPOSITORY/rulesets/$id" --input "$file" > /dev/null
+              echo "updated ruleset $name ($id)"
+            else
+              gh api -X POST "repos/$GITHUB_REPOSITORY/rulesets" --input "$file" > /dev/null
+              echo "created ruleset $name"
+            fi
+          done
