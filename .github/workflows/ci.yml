@@ -43,6 +43,9 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+      - name: Normal build first, as a developer's target directory would have
+        working-directory: tests/fixture
+        run: cargo test --no-run
       - name: Find the planted dead weight
         working-directory: tests/fixture
         run: |

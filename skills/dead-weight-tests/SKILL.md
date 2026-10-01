@@ -39,7 +39,7 @@ Requirements: `cargo-nextest`, `cargo-llvm-cov`, the `llvm-tools-preview` rustup
 - `--before CMD` runs after coverage is enabled and before the tests. Use it to build binaries that tests spawn from another package, so those binaries are instrumented too.
 - Each test gets its own profile through a nextest target runner. If the project's `.config/nextest.toml` defines wrapper scripts, add `target-runner = "within-wrapper"` to each one, or tests behind a wrapper write no coverage.
 - A scoped run only finds witnesses inside its scope. A test with no witness in scope may still be redundant. Prefer a scoped run unless the user asks for the whole workspace: every test needs its own `llvm-cov export`.
-- Instrumented builds share `target/`, so the next normal build recompiles.
+- `collect.sh` first runs `cargo llvm-cov clean --workspace`: the coverage wrapper sits outside cargo's fingerprint, so artifacts from a normal build would otherwise be reused without instrumentation. Workspace crates rebuild with coverage, and the next normal build recompiles them. If a nextest wrapper needs prebuilt workspace binaries, build them with `--before`.
 - Output: `target/coverage/per-test/tests/*.json.gz` (one pruned `llvm-cov export` JSON per passing test) and `skipped.json` (failed or killed tests, excluded because their coverage is partial).
 
 ## 2. Analyze and render

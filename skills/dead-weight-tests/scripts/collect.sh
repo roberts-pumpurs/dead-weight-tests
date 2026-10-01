@@ -16,8 +16,8 @@
 # passing test, and DIR/tests/skipped.json for failed or killed tests.
 #
 # Requires cargo-nextest, cargo-llvm-cov, the llvm-tools-preview rustup
-# component, and python3. Instrumented builds share the target directory, so
-# the next normal build recompiles.
+# component, and python3. Workspace crates are cleaned and rebuilt with
+# coverage, so the next normal build recompiles them.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -46,6 +46,9 @@ mkdir -p "$out/profiles" "$out/other"
 
 # Instrument workspace crates only (cargo-llvm-cov's RUSTC_WRAPPER mode).
 eval "$(cargo llvm-cov show-env --sh 2>/dev/null || cargo llvm-cov show-env --export-prefix)"
+# The wrapper adds -C instrument-coverage outside cargo's fingerprint, so artifacts from a
+# normal build would be reused uninstrumented. Remove the workspace crates' artifacts first.
+cargo llvm-cov clean --workspace
 # Processes outside a test (build scripts, setup scripts, test listing) write here.
 export LLVM_PROFILE_FILE="$out/other/%p-%m.profraw"
 export DWT_PROFILE_ROOT="$out/profiles"
