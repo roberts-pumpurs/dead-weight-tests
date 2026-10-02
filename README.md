@@ -25,14 +25,15 @@ flowchart LR
   B -->|llvm-cov export JSON per test| C[analyze.py]
   C --> D[report.md + candidates.json]
   C --> E[report.html]
-  E -->|copy review prompt| F[agent writes verdicts.jsonl]
-  F --> E
+  E -->|copy review prompt| F[agent runs record_verdict.py]
+  F -->|validated rows| G[verdicts.jsonl]
+  G --> E
 ```
 
 1. `collect.sh` turns on coverage instrumentation and runs nextest with a target runner. Nextest runs every test in its own process, and the runner gives each process its own profile directory. Subprocesses a test starts write to the same directory.
 2. `export.py` merges each test's profiles and exports its covered LLVM regions.
 3. `analyze.py` drops test code (every test runs its own body), groups regions that the same tests cover, and finds duplicate, subsumed, and near-duplicate tests. It writes a markdown report, a JSON candidate list, and a self-contained HTML report.
-4. The HTML report shows a module treemap, a containment graph, the two tests of a pair side by side with source lines colored by which test runs them, and per-line test counts. Its "Copy review prompt" button hands chosen candidates to an agent, which records cut, merge, or keep verdicts in `verdicts.jsonl`.
+4. The HTML report shows a module treemap, a containment graph, the two tests of a pair side by side with source lines colored by which test runs them, and per-line test counts. Its "Copy review prompt" button hands chosen candidates to an agent, which records cut, merge, keep, or fix verdicts through `record_verdict.py`. The recorder checks each pair against `candidates.json` and appends valid rows to `verdicts.jsonl`. A fix verdict means the test's name promises a check its body never makes.
 
 ## Usage without an agent
 
@@ -49,7 +50,7 @@ open target/coverage/per-test/report.html
 ## Development
 
 ```sh
-python3 -m unittest discover -s tests          # analyzer unit tests
+python3 -m unittest discover -s tests          # analyzer and recorder unit tests
 shellcheck skills/dead-weight-tests/scripts/*.sh
 cd tests/fixture && ../../skills/dead-weight-tests/scripts/collect.sh -- --workspace   # end-to-end
 ```
