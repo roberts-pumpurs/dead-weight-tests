@@ -24,6 +24,9 @@ Outputs: a markdown report, optional candidates JSON, and optional
 self-contained HTML report (`--html`) that embeds the model from
 `report_template.html`. Verdicts from `verdicts.jsonl` are shown when present.
 
+Within duplicates and subsumed, and within near duplicates, pairs whose two
+tests live in the same source file come first: they are the cheapest to review.
+
 Candidates are suspects, not verdicts: coverage shows what a test executes,
 not what it asserts. Stdlib only.
 """
@@ -43,6 +46,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
+# `fix`: the test's name or doc comment promises a check its body never makes.
+VERDICTS = ("cut", "merge", "keep", "fix")
 
 
 @dataclass
@@ -83,6 +88,7 @@ class Candidate:
     gap: int  # regions only `other` covers
     extra: int  # regions only `test` covers
     supersets: int  # subsumed: strict supersets; duplicate: group size - 1; near: 0
+    same_file: bool = False  # both tests located, in the same source file
 
     @property
     def jaccard(self) -> float:
@@ -450,6 +456,25 @@ class Locator:
         end = text.count("\n", 0, block_end(text, brace)) + 1
         return {"path": location.path, "start": start, "end": end, "source": "\n".join(lines[start - 1 : end])}
 
+    def same_file(self, a: Test, b: Test) -> bool:
+        """True when both tests are located and their source files resolve to the same path."""
+        la, lb = self.locate(a), self.locate(b)
+        if la is None or lb is None:
+            return False
+        return la.path == lb.path or (self.repo / la.path).resolve() == (self.repo / lb.path).resolve()
+
+
+def same_file_first(cov: Coverage, candidates: list[Candidate], locator: Locator) -> list[Candidate]:
+    """Set `same_file` on each candidate and move same-file pairs ahead within each section.
+
+    The sort is stable, so each section keeps its own order: smallest gap first
+    for duplicates and subsumed, Jaccard for near duplicates.
+    """
+    tests = cov.tests
+    for c in candidates:
+        c.same_file = locator.same_file(tests[c.test], tests[c.other])
+    return sorted(candidates, key=lambda c: (c.kind == "near", not c.same_file))
+
 
 def short(test: Test) -> str:
     return "::".join(test.name.split("::")[-2:])
@@ -503,6 +528,7 @@ def render(cov: Coverage, candidates: list[Candidate], locator: Locator, skipped
         f"- Duplicate candidates: {kinds['duplicate']}",
         f"- Subsumed candidates: {kinds['subsumed']}" + (f" ({', '.join(f'{k}: {v}' for k, v in sorted(pairs.items()))})" if pairs else ""),
         f"- Near duplicates (Jaccard >= {near}): {kinds['near']}",
+        f"- Same-file pairs (candidate and other in one source file, listed first): {sum(c.same_file for c in candidates)}",
         "",
         "Candidates are suspects. Coverage shows what a test executes, not what it asserts.",
         "Read the candidate and the other test before cutting.",
@@ -521,12 +547,15 @@ def render(cov: Coverage, candidates: list[Candidate], locator: Locator, skipped
             "",
         ]
 
-    out += [f"## Candidates (top {min(limit, len(candidates))} of {len(candidates)}: duplicates and subsumed by smallest gap, then near by Jaccard)", ""]
+    out += [
+        f"## Candidates (top {min(limit, len(candidates))} of {len(candidates)}: duplicates and subsumed by smallest gap, then near by Jaccard; same-file pairs first in each)",
+        "",
+    ]
     for n, c in enumerate(candidates[:limit], 1):
         t, o = tests[c.test], tests[c.other]
         own = set(t.classes)
         out += [
-            f"### {n}. {c.kind}: `{t.id}`",
+            f"### {n}. {c.kind}{' (same file)' if c.same_file else ''}: `{t.id}`",
             "",
             f"- Tier: {t.tier}. Location: {locator.describe(t)}",
             f"- Covers {t.weight} regions. Top files: {fmt_files(cov.top_files(own))}",
@@ -574,13 +603,17 @@ def candidate_rows(cov: Coverage, candidates: list[Candidate], locator: Locator)
             "extra": c.extra,
             "jaccard": round(c.jaccard, 4),
             "supersets": c.supersets,
+            "same_file": c.same_file,
         }
         for c in candidates
     ]
 
 
 def load_verdicts(path: Path) -> list[dict]:
-    """verdicts.jsonl lines: {"test", "other", "verdict", "reason"}. Later lines win per (test, other)."""
+    """verdicts.jsonl lines: {"test", "other", "verdict", "reason"}. Later lines win per (test, other).
+
+    Malformed lines and verdicts outside VERDICTS are skipped with a warning on stderr.
+    """
     if not path.is_file():
         return []
     latest: dict[tuple[str, str], dict] = {}
@@ -589,13 +622,36 @@ def load_verdicts(path: Path) -> list[dict]:
             continue
         try:
             row = json.loads(line)
-            latest[(row["test"], row["other"])] = {k: row[k] for k in ("test", "other", "verdict", "reason")}
-        except (json.JSONDecodeError, KeyError) as error:
+            record = {k: row[k] for k in ("test", "other", "verdict", "reason")}
+        except (json.JSONDecodeError, KeyError, TypeError) as error:
             print(f"{path}:{n}: skipped malformed verdict ({error})", file=sys.stderr)
+            continue
+        if record["verdict"] not in VERDICTS:
+            print(f"{path}:{n}: skipped unknown verdict {record['verdict']!r} (expected one of {', '.join(VERDICTS)})", file=sys.stderr)
+            continue
+        latest[(record["test"], record["other"])] = record
     return list(latest.values())
 
 
-def build_model(cov: Coverage, candidates: list[Candidate], locator: Locator, repo: Path, near: float, verdicts_path: Path, skipped: list[str]) -> dict:
+def display_path(path: Path, repo: Path) -> str:
+    """`path` relative to `repo` when inside it, else absolute."""
+    try:
+        return str(path.resolve().relative_to(repo))
+    except ValueError:
+        return str(path.resolve())
+
+
+def build_model(
+    cov: Coverage,
+    candidates: list[Candidate],
+    locator: Locator,
+    repo: Path,
+    near: float,
+    verdicts_path: Path,
+    skipped: list[str],
+    candidates_path: Path | None = None,
+) -> dict:
+    """The HTML report model. `candidates_path` is the written candidates JSON, if any."""
     tests = cov.tests
     sources = []
     for name in cov.file_names:
@@ -604,14 +660,8 @@ def build_model(cov: Coverage, candidates: list[Candidate], locator: Locator, re
             sources.append({"path": name, "source": path.read_text()})
         except (OSError, UnicodeDecodeError):
             sources.append({"path": name, "source": None})
-    try:
-        verdicts_rel = str(verdicts_path.resolve().relative_to(repo))
-    except ValueError:
-        verdicts_rel = str(verdicts_path.resolve())
-    try:
-        skill_rel = str((SKILL_DIR / "SKILL.md").relative_to(repo))
-    except ValueError:
-        skill_rel = str(SKILL_DIR / "SKILL.md")
+    verdicts_rel = display_path(verdicts_path, repo)
+    skill_rel = display_path(SKILL_DIR / "SKILL.md", repo)
     model_tests = []
     for t in tests:
         location = locator.locate(t)
@@ -636,6 +686,7 @@ def build_model(cov: Coverage, candidates: list[Candidate], locator: Locator, re
             "repo": str(repo),
             "near_threshold": near,
             "verdicts_path": verdicts_rel,
+            "candidates_path": display_path(candidates_path, repo) if candidates_path else None,
             "skill_path": skill_rel,
             "excluded_test_regions": cov.excluded_count,
             "skipped": skipped,
@@ -654,6 +705,7 @@ def build_model(cov: Coverage, candidates: list[Candidate], locator: Locator, re
                 "extra": c.extra,
                 "jaccard": round(c.jaccard, 4),
                 "supersets": c.supersets,
+                "same_file": c.same_file,
             }
             for c in candidates
         ],
@@ -692,8 +744,8 @@ def main() -> None:
 
     repo = args.repo.resolve()
     cov = Coverage(files, TestCode(repo))
-    candidates = find_candidates(cov, args.near)
     locator = Locator(repo)
+    candidates = same_file_first(cov, find_candidates(cov, args.near), locator)
     report = render(cov, candidates, locator, skipped, args.near, args.limit, args.graph_limit)
     if args.out:
         args.out.write_text(report + "\n")
@@ -706,7 +758,7 @@ def main() -> None:
     if args.html:
         first_dir = next((p for p in args.inputs if p.is_dir()), args.inputs[0].parent)
         verdicts = args.verdicts or first_dir.resolve().parent / "verdicts.jsonl"
-        write_html(build_model(cov, candidates, locator, repo, args.near, verdicts, skipped), args.html)
+        write_html(build_model(cov, candidates, locator, repo, args.near, verdicts, skipped, args.json), args.html)
         print(f"wrote {args.html}", file=sys.stderr)
 
 
