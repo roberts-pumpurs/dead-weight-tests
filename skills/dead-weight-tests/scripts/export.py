@@ -12,6 +12,8 @@ code regions (kind 0), covered or not. A region is
 `file_id` indexes the function's `filenames`.
 
 Failing or killed tests are listed in `skipped.json`: their coverage is partial.
+With `--listed`, tests that nextest selected but that never reached
+`runner.sh` (no `meta`, e.g. killed inside a wrapper script) are listed too.
 
 Called by `collect.sh`; `analyze.py` reads the output.
 """
@@ -59,6 +61,38 @@ def workspace_bins(root: Path) -> list[str]:
     debug = Path(meta["target_directory"]) / "debug"
     names = {t["name"] for p in meta["packages"] for t in p["targets"] if "bin" in t["kind"]}
     return sorted(str(debug / n) for n in names if (debug / n).is_file())
+
+
+NEVER_REACHED = "never reached the runner"
+
+
+def listed_tests(text: str) -> set[tuple[str, str]]:
+    """(binary_id, test_name) pairs that `cargo nextest list --message-format json` selected.
+
+    Malformed or empty input yields an empty set with a warning: reconciliation
+    is a best-effort extra and must not fail the export.
+    """
+    try:
+        suites = json.loads(text)["rust-suites"]
+        return {
+            (suite.get("binary-id", key), name)
+            for key, suite in suites.items()
+            for name, case in suite["testcases"].items()
+            if case.get("filter-match", {}).get("status") == "matches"
+        }
+    except (ValueError, KeyError, TypeError, AttributeError) as err:
+        print(f"export.py: warning: cannot read the nextest test list ({err!r}); skipping reconciliation", file=sys.stderr)
+        return set()
+
+
+def reached_tests(test_dirs: list[Path]) -> set[tuple[str, str]]:
+    """(binary_id, test_name) pairs that runner.sh started, read from each `meta`."""
+    return {tuple((d / "meta").read_text().split("\n")[:2]) for d in test_dirs}
+
+
+def never_reached(listed: set[tuple[str, str]], test_dirs: list[Path]) -> list[str]:
+    """skipped.json entries for listed tests that have no profile dir with `meta`."""
+    return sorted(f"{binary_id} {name}: {NEVER_REACHED}" for binary_id, name in listed - reached_tests(test_dirs))
 
 
 def export_one(test_dir: Path, out_dir: Path, root: Path, bins: list[str], profdata: str, cov: str) -> tuple[str, str | None]:
@@ -124,6 +158,7 @@ def main() -> None:
     parser.add_argument("profiles", type=Path, help="profile root written by runner.sh")
     parser.add_argument("out", type=Path, help="output directory for <hash>.json.gz files")
     parser.add_argument("-j", "--jobs", type=int, default=os.cpu_count())
+    parser.add_argument("--listed", type=Path, help="`cargo nextest list --message-format json` output; report listed tests with no profile")
     args = parser.parse_args()
 
     root = Path.cwd().resolve()
@@ -142,8 +177,11 @@ def main() -> None:
             if done % 200 == 0 or done == len(futures):
                 print(f"exported {done}/{len(futures)}", file=sys.stderr)
 
+    exported = len(test_dirs) - len(skipped)
+    if args.listed:
+        skipped += never_reached(listed_tests(args.listed.read_text()), test_dirs)
     (args.out / "skipped.json").write_text(json.dumps(sorted(skipped), indent=2) + "\n")
-    print(f"{len(test_dirs) - len(skipped)} tests exported to {args.out}; {len(skipped)} skipped (see skipped.json)")
+    print(f"{exported} tests exported to {args.out}; {len(skipped)} skipped (see skipped.json)")
 
 
 if __name__ == "__main__":

@@ -62,6 +62,7 @@
   .v-cut { background: #fee2e2; color: #b91c1c; }
   .v-merge { background: #fef3c7; color: #92400e; }
   .v-keep { background: #dcfce7; color: #166534; }
+  .v-fix { background: #cffafe; color: #155e75; }
   .v-none { background: #f3f4f6; color: #6b7280; }
   .chip { display: inline-flex; align-items: center; gap: 4px; background: #eef2ff; border-radius: 10px; padding: 0 8px; }
   .chip button { border: 0; background: none; padding: 0 2px; }
@@ -133,7 +134,8 @@
       <label><input type="checkbox" data-kind="subsumed" checked> subsumed</label>
       <label><input type="checkbox" data-kind="near" checked> near</label></span>
     <select id="f-tier"><option value="">any tier</option><option value="unit">unit</option><option value="integration">integration</option></select>
-    <select id="f-verdict"><option value="">any verdict</option><option value="none">unreviewed</option><option value="reviewed">reviewed</option><option value="cut">cut</option><option value="merge">merge</option><option value="keep">keep</option></select>
+    <select id="f-file" title="candidate and other test in the same source file"><option value="">any file</option><option value="same">same file</option><option value="different">different files</option></select>
+    <select id="f-verdict"><option value="">any verdict</option><option value="none">unreviewed</option><option value="reviewed">reviewed</option><option value="cut">cut</option><option value="merge">merge</option><option value="keep">keep</option><option value="fix">fix</option></select>
     <input type="search" id="f-q" placeholder="search test id">
     <label>near Jaccard ≥ <input type="range" id="f-j" max="1" step="0.001"> <output id="f-j-out"></output></label>
     <span id="f-module"></span>
@@ -149,8 +151,9 @@
 const M = JSON.parse(document.getElementById('model').textContent);
 const { meta, files: F, regions: R, classes: CL, tests: T, candidates: C } = M;
 const KINDS = ['duplicate', 'subsumed', 'near'];
-const VERDICTS = ['cut', 'merge', 'keep'];
-const VERDICT_RANK = { '': 0, keep: 1, merge: 2, cut: 3 };
+// fix: the test's name or doc comment promises a check its body never makes. Not a removal.
+const VERDICTS = ['cut', 'merge', 'keep', 'fix'];
+const VERDICT_RANK = { '': 0, keep: 1, fix: 2, merge: 3, cut: 4 };
 const OTHER_ROLE = { duplicate: 'keeper', subsumed: 'witness', near: 'near twin' };
 // GRAPH_CAP bounds the nodes handed to cytoscape. Above COLLAPSE_AT the graph starts with file groups
 // collapsed, so the visible node count stays near the number of files.
@@ -338,7 +341,7 @@ function foldedRows(n, shown, row) {
 }
 
 // ---------- filters, sorting, filtered candidate list
-const filter = { kinds: new Set(KINDS), tier: '', verdict: '', module: '', q: '', minJ: meta.near_threshold ?? 0 };
+const filter = { kinds: new Set(KINDS), tier: '', file: '', verdict: '', module: '', q: '', minJ: meta.near_threshold ?? 0 };
 const sort = { key: 'kind', dir: 1 };
 const SORTS = {
   kind: c => KINDS.indexOf(c.kind), test: c => T[c.test].id, other: c => T[c.other].id, tier: c => T[c.test].tier,
@@ -355,6 +358,7 @@ function filtered() {
     if (!filter.kinds.has(c.kind)) return;
     if (c.kind === 'near' && c.jaccard < filter.minJ) return;
     if (filter.tier && T[c.test].tier !== filter.tier) return;
+    if (filter.file && Boolean(c.same_file) !== (filter.file === 'same')) return;
     if (mods && mods[c.test] !== filter.module) return;
     if (q && !T[c.test].id.toLowerCase().includes(q) && !T[c.other].id.toLowerCase().includes(q)) return;
     if (filter.verdict) {
@@ -371,19 +375,31 @@ function filtered() {
   return (filteredCache = out);
 }
 
+// Shell-quote a path for the copied command line.
+const shq = s => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${String(s).replace(/'/g, `'\\''`)}'`);
 function reviewPrompt(cis) {
+  const verdictLine = '{"test": "<candidate id>", "other": "<other id>", "verdict": "cut|merge|keep|fix", "reason": "<one sentence naming the concrete assertion difference>"}';
+  const recorder = `${meta.skill_path.replace(/\/?SKILL\.md$/, '') || '.'}/scripts/record_verdict.py`;
+  const record = meta.candidates_path
+    ? [
+      'Record verdicts with the validating recorder, not by hand. Pipe one JSON line per candidate into:',
+      `python3 ${shq(recorder)} --candidates ${shq(meta.candidates_path)} --verdicts ${shq(meta.verdicts_path)}`,
+      'Each line:', verdictLine,
+      'If the recorder reports invalid rows, correct them and pipe them in again.',
+    ]
+    : [`For each candidate, append one JSON line to ${meta.verdicts_path}:`, verdictLine];
   const lines = [
     `Review dead-weight test candidates in ${meta.repo}.`,
-    `Follow section "4. Review rules" of ${meta.skill_path}: read the candidate and the other test, compare assertions, decide cut, merge, or keep.`,
-    `For each candidate, append one JSON line to ${meta.verdicts_path}:`,
-    '{"test": "<candidate id>", "other": "<other id>", "verdict": "cut|merge|keep", "reason": "<one sentence naming the concrete assertion difference>"}',
+    `Follow section "4. Review rules" of ${meta.skill_path}: read the candidate and the other test, compare assertions, decide cut, merge, keep, or fix.`,
+    "Use fix when a test's name or doc comment promises a check its body never makes; the reason names the missing check.",
+    ...record,
     'Do not edit tests.',
     '',
     'Candidates:',
   ];
   cis.forEach((ci, n) => {
     const c = C[ci], t = T[c.test], o = T[c.other];
-    lines.push(`${n + 1}. [${c.kind}] ${t.id} (${loc(t)}) vs ${o.id} (${loc(o)}): shared ${c.shared} regions, other adds ${c.gap}, candidate adds ${c.extra}, Jaccard ${fmtJ(c.jaccard)}`);
+    lines.push(`${n + 1}. [${c.kind}${c.same_file ? ', same file' : ''}] ${t.id} (${loc(t)}) vs ${o.id} (${loc(o)}): shared ${c.shared} regions, other adds ${c.gap}, candidate adds ${c.extra}, Jaccard ${fmtJ(c.jaccard)}`);
   });
   return lines.join('\n');
 }
@@ -422,15 +438,16 @@ const notFound = what => mount('missing', `<section>${esc(what)} not found. <a h
 // ---------- overview
 function overview() {
   const kinds = Object.fromEntries(KINDS.map(k => [k, 0]));
-  const vcount = { cut: 0, merge: 0, keep: 0, none: 0 };
-  for (const c of C) { kinds[c.kind]++; vcount[verdictOf(c)?.verdict ?? 'none']++; }
+  const vcount = { cut: 0, merge: 0, keep: 0, fix: 0, none: 0 };
+  let sameFile = 0;
+  for (const c of C) { kinds[c.kind]++; vcount[verdictOf(c)?.verdict ?? 'none']++; if (c.same_file) sameFile++; }
   const unit = T.filter(t => t.tier === 'unit').length;
   const covered = CL.reduce((n, cls) => n + cls.length, 0);
   const cards = [
     ['Tests', T.length], ['Unit', unit], ['Integration', T.length - unit], ['Regions', R.length], ['Covered regions', covered],
     ['Files', F.length], ['Coverage classes', CL.length], ['Excluded test regions', meta.excluded_test_regions ?? 0],
-    ['Duplicate', kinds.duplicate], ['Subsumed', kinds.subsumed], [`Near (J ≥ ${meta.near_threshold})`, kinds.near],
-    ['Cut', vcount.cut], ['Merge', vcount.merge], ['Keep', vcount.keep], ['Unreviewed', vcount.none],
+    ['Duplicate', kinds.duplicate], ['Subsumed', kinds.subsumed], [`Near (J ≥ ${meta.near_threshold})`, kinds.near], ['Same file', sameFile],
+    ['Cut', vcount.cut], ['Merge', vcount.merge], ['Keep', vcount.keep], ['Fix', vcount.fix], ['Unreviewed', vcount.none],
     ['Skipped', meta.skipped?.length ?? 0], ['Empty', M.empty.length],
   ];
   const listCapped = (items, render) => items.slice(0, LIST_CAP).map(x => `<li>${render(x)}</li>`).join('')
@@ -543,6 +560,7 @@ const GRAPH_STYLE = [
   { selector: 'node[verdict = "cut"]', style: { 'background-color': '#dc2626' } },
   { selector: 'node[verdict = "merge"]', style: { 'background-color': '#f59e0b' } },
   { selector: 'node[verdict = "keep"]', style: { 'background-color': '#16a34a' } },
+  { selector: 'node[verdict = "fix"]', style: { 'background-color': '#0891b2' } },
   { selector: ':parent', style: { label: 'data(label)', shape: 'round-rectangle', 'text-valign': 'top', 'text-halign': 'center', 'font-size': 10, color: '#4b5563', 'background-color': '#f3f4f6', 'background-opacity': 0.7, 'border-width': 1, 'border-style': 'dashed', 'border-color': '#9ca3af', padding: 6 } },
   // A collapsed file group is an ordinary node; its size grows with the number of tests it hides.
   { selector: 'node.cy-expand-collapse-collapsed-node', style: { label: 'data(collapsedLabel)', 'text-wrap': 'wrap', 'text-max-width': 180, 'font-size': 10, shape: 'round-rectangle', width: 'data(size)', height: 'data(size)', 'background-color': '#e5e7eb', 'border-width': 1, 'border-style': 'dashed', 'border-color': '#6b7280' } },
@@ -558,7 +576,7 @@ const GRAPH_STYLE = [
   // Edges rerouted to a collapsed group: keep them, but drop the per-pair label so the overview stays legible.
   { selector: 'edge.via-group', style: { label: '', 'line-opacity': 0.45 } },
 ];
-// Strongest verdict over every candidate pair where the test is the candidate (cut > merge > keep).
+// Strongest verdict over every candidate pair where the test is the candidate (cut > merge > fix > keep).
 function nodeVerdict(ti) {
   let best = '';
   for (const ci of candsAsTest().get(ti) ?? []) {
@@ -570,7 +588,7 @@ function nodeVerdict(ti) {
 
 function graph() {
   mount('graph', `<div class="graph-bar"><span id="g-note"></span>
-      <span class="legend">node: <i style="background:#dc2626"></i>cut <i style="background:#f59e0b"></i>merge <i style="background:#16a34a"></i>keep
+      <span class="legend">node: <i style="background:#dc2626"></i>cut <i style="background:#f59e0b"></i>merge <i style="background:#0891b2"></i>fix <i style="background:#16a34a"></i>keep
       <i style="background:#9ca3af"></i>none · ● unit, ▢ integration (thick border) · edges candidate → other: solid subsumed (+gap), double duplicate, dashed near (Jaccard)</span></div>
     <div class="graph-tools">
       <input type="search" id="g-find" placeholder="find test (Enter to focus)"> <span id="g-find-out" class="mute"></span>
@@ -776,6 +794,7 @@ function pair([ciArg], q) {
         <span>shared <b>${num(c.shared)}</b></span><span>gap (${role} only) <b>${num(c.gap)}</b></span>
         <span>extra (candidate only) <b>${num(c.extra)}</b></span><span>Jaccard <b>${fmtJ(c.jaccard)}</b></span>
         ${c.kind === 'near' ? '' : `<span>${c.kind === 'duplicate' ? 'group size − 1' : 'strict supersets'} <b>${num(c.supersets)}</b></span>`}
+        ${c.same_file ? '<span><b>same file</b></span>' : ''}
       </div>
       ${v ? `<p><b>${esc(v.verdict)}</b>: ${esc(v.reason ?? '')}</p>` : ''}
       <div class="row" style="margin-top:8px">
@@ -995,6 +1014,7 @@ function initFilters() {
     filtersChanged();
   }));
   $('#f-tier').addEventListener('change', e => { filter.tier = e.target.value; filtersChanged(); });
+  $('#f-file').addEventListener('change', e => { filter.file = e.target.value; filtersChanged(); });
   $('#f-verdict').addEventListener('change', e => { filter.verdict = e.target.value; filtersChanged(); });
   $('#f-q').addEventListener('input', debounce(e => { filter.q = e.target.value; filtersChanged(); }, 150));
   $('#f-module').addEventListener('click', e => {
