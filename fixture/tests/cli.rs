@@ -8,5 +8,8 @@ fn cli_describes_a_negative_number() {
         .arg("-3")
         .output()
         .expect("run the describe binary");
-    assert_eq!(String::from_utf8(out.stdout).unwrap().trim(), "-3 is negative");
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap().trim(),
+        "-3 is negative"
+    );
 }

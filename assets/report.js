@@ -1,160 +1,10 @@
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Dead-weight tests</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.10.0/styles/github.min.css">
-<script src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/elkjs@0.9.3/lib/elk.bundled.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/cytoscape-elk@2.3.0/dist/cytoscape-elk.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/cytoscape-expand-collapse@4.1.1/cytoscape-expand-collapse.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/cytoscape-navigator@2.0.2/cytoscape-navigator.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@upsetjs/bundle@1.11.0/dist/upsetjs.umd.production.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.10.0/highlight.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.10.0/languages/rust.min.js"></script>
-<style>
-  :root { --fg: #1f2937; --mute: #6b7280; --line: #e5e7eb; --accent: #2563eb; }
-  * { box-sizing: border-box; }
-  [hidden] { display: none !important; }
-  body { margin: 0; font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--fg); background: #f9fafb; }
-  a { color: var(--accent); text-decoration: none; }
-  a:hover { text-decoration: underline; }
-  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
-  #top { position: sticky; top: 0; z-index: 5; }
-  header { display: flex; align-items: center; gap: 16px; padding: 8px 16px; background: #111827; color: #f9fafb; }
-  header h1 { font-size: 15px; margin: 0; }
-  header nav a { color: #d1d5db; padding: 3px 9px; border-radius: 4px; }
-  header nav a.on { background: #374151; color: #fff; }
-  header .meta { margin-left: auto; color: #9ca3af; font-size: 12px; }
-  header .btn { background: #1f2937; color: #f9fafb; border-color: #4b5563; }
-  #filters { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; padding: 7px 16px; background: #fff; border-bottom: 1px solid var(--line); }
-  #filters input[type=search] { width: 260px; }
-  main { padding: 16px; }
-  section { background: #fff; border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; margin-bottom: 16px; }
-  h2 { font-size: 14px; margin: 0 0 10px; display: flex; align-items: center; gap: 10px; }
-  h3 { font-size: 13px; margin: 12px 0 6px; }
-  button, .btn { font: inherit; padding: 3px 10px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; color: #111827; cursor: pointer; }
-  button:disabled { opacity: .5; cursor: default; }
-  input, select { font: inherit; }
-  .mute { color: var(--mute); }
-  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
-  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
-  .card { border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
-  .card b { display: block; font-size: 18px; font-variant-numeric: tabular-nums; }
-  .card span { color: var(--mute); font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
-  details { margin-top: 10px; }
-  details ul { max-height: 240px; overflow: auto; margin: 6px 0; }
-  table.grid { width: 100%; border-collapse: collapse; }
-  .grid th, .grid td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-  .grid th { font-size: 11px; text-transform: uppercase; color: var(--mute); user-select: none; }
-  .grid th[data-sort] { cursor: pointer; }
-  .grid .num { text-align: right; font-variant-numeric: tabular-nums; }
-  .grid tr.click { cursor: pointer; }
-  .grid tr.click:hover, .grid tr.on { background: #eff6ff; }
-  .clip { max-width: 440px; overflow: hidden; text-overflow: ellipsis; }
-  .pager { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
-  .badge { display: inline-block; padding: 0 7px; border-radius: 9px; font-size: 11px; font-weight: 600; }
-  .k-duplicate { background: #e0e7ff; color: #3730a3; }
-  .k-subsumed { background: #f3e8ff; color: #6b21a8; }
-  .k-near { background: #dbeafe; color: #1e40af; }
-  .v-cut { background: #fee2e2; color: #b91c1c; }
-  .v-merge { background: #fef3c7; color: #92400e; }
-  .v-keep { background: #dcfce7; color: #166534; }
-  .v-fix { background: #cffafe; color: #155e75; }
-  .v-none { background: #f3f4f6; color: #6b7280; }
-  .chip { display: inline-flex; align-items: center; gap: 4px; background: #eef2ff; border-radius: 10px; padding: 0 8px; }
-  .chip button { border: 0; background: none; padding: 0 2px; }
-  dl.info { display: grid; grid-template-columns: max-content 1fr; gap: 2px 14px; margin: 0; }
-  dl.info dt { color: var(--mute); }
-  dl.info dd { margin: 0; }
-  .split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
-  .side { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 12px; align-items: start; }
-  .side aside { position: sticky; top: 56px; max-height: calc(100vh - 72px); overflow: auto; margin: 0; }
-  .code { font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; border: 1px solid var(--line); border-radius: 4px; overflow: auto; background: #fff; }
-  .code.tall { max-height: 72vh; }
-  .ln { display: flex; white-space: pre; min-width: max-content; }
-  .ln .no { position: sticky; left: 0; flex: 0 0 54px; text-align: right; padding-right: 6px; color: #9ca3af; background: #fafafa; border-right: 4px solid transparent; user-select: none; }
-  .ln .src { padding: 0 8px; }
-  /* Pair line status: b both, o other-only, t candidate-only, u instrumented but covered by neither. */
-  .ln.b { background: #eff6ff; } .ln.b .no { border-right-color: #3b82f6; }
-  .ln.o { background: #fff7ed; } .ln.o .no { border-right-color: #f97316; }
-  .ln.t { background: #f0fdf4; } .ln.t .no { border-right-color: #22c55e; }
-  .ln.u .no { border-right-color: #fca5a5; }
-  .fold { padding: 1px 0 1px 70px; background: #f3f4f6; color: var(--mute); cursor: pointer; font-style: italic; }
-  .fold:hover { background: #e5e7eb; }
-  /* File view heat bar. */
-  .file .ln { cursor: pointer; }
-  .heat { flex: 0 0 46px; position: relative; background: #f9fafb; }
-  .heat i { position: absolute; left: 0; top: 2px; bottom: 2px; background: #fb923c; }
-  .ln.u .heat { background: #fee2e2; }
-  .ln.hit { background: #ecfdf5; } .ln.hit .no { border-right-color: #10b981; }
-  .ln.sel { outline: 2px solid var(--accent); outline-offset: -2px; }
-  .legend { color: var(--mute); }
-  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: -2px; margin: 0 3px 0 10px; border: 1px solid #0002; }
-  #treemap svg { display: block; }
-  #treemap text { font-size: 10px; pointer-events: none; fill: #111827; }
-  #treemap .bin { font-weight: 600; fill: #374151; }
-  #treemap .cell { cursor: pointer; }
-  #treemap .cell.sel rect { stroke: #111827; stroke-width: 3; }
-  .graph-bar { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin-bottom: 8px; }
-  .notice { background: #fef3c7; color: #92400e; padding: 2px 8px; border-radius: 4px; }
-  .graph-wrap { position: relative; }
-  /* Code panel: click a test or edge in the graph to read the source without leaving the graph. */
-  #g-detail { position: absolute; top: 10px; right: 10px; width: min(560px, 45%); max-height: calc(100% - 180px); overflow: auto; z-index: 6; background: #fff; border: 1px solid #9ca3af; border-radius: 6px; padding: 10px 12px; box-shadow: 0 4px 16px #0002; }
-  #g-detail h3 { margin: 10px 0 4px; font-size: 13px; }
-  #g-detail .close { float: right; }
-  #cy { height: calc(100vh - 200px); min-height: 400px; background: #fff; border: 1px solid var(--line); border-radius: 6px; }
-  .graph-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
-  .graph-tools input[type=search] { width: 240px; }
-  /* Minimap: cytoscape-navigator draws a thumbnail plus a draggable viewport box into this container. */
-  #cy-nav { position: absolute; right: 10px; bottom: 10px; width: 200px; height: 140px; background: #fff; border: 1px solid #9ca3af; border-radius: 4px; overflow: hidden; z-index: 5; }
-  #cy-nav > img { max-width: 100%; max-height: 100%; }
-  #cy-nav > canvas { position: absolute; top: 0; left: 0; }
-  #cy-nav .cytoscape-navigatorView { position: absolute; top: 0; left: 0; cursor: move; background: #93c5fd; opacity: .45; }
-  #cy-nav .cytoscape-navigatorOverlay { position: absolute; inset: 0; }
-  #upset-plot { min-height: 60px; }
-  #tip { position: fixed; z-index: 10; background: #111827; color: #f9fafb; font-size: 12px; padding: 6px 8px; border-radius: 4px; pointer-events: none; white-space: pre; }
-  #toast { position: fixed; right: 16px; bottom: 16px; z-index: 10; background: #111827; color: #fff; padding: 8px 12px; border-radius: 6px; opacity: 0; transition: opacity .2s; pointer-events: none; }
-  #toast.show { opacity: 1; }
-</style>
-</head>
-<body>
-<div id="top">
-  <header>
-    <h1>Dead-weight tests</h1>
-    <nav><a href="#/overview" data-view="overview">Overview</a> <a href="#/graph" data-view="graph">Graph</a></nav>
-    <label class="btn">Load verdicts.jsonl <input type="file" id="verdict-file" accept=".jsonl,.json,.txt" hidden></label>
-    <span id="verdict-status"></span>
-    <span class="meta" id="meta"></span>
-  </header>
-  <div id="filters">
-    <span><label><input type="checkbox" data-kind="duplicate" checked> duplicate</label>
-      <label><input type="checkbox" data-kind="subsumed" checked> subsumed</label>
-      <label><input type="checkbox" data-kind="near" checked> near</label></span>
-    <select id="f-tier"><option value="">any tier</option><option value="unit">unit</option><option value="integration">integration</option></select>
-    <select id="f-file" title="candidate and other test in the same source file"><option value="">any file</option><option value="same">same file</option><option value="different">different files</option></select>
-    <select id="f-verdict"><option value="">any verdict</option><option value="none">unreviewed</option><option value="reviewed">reviewed</option><option value="cut">cut</option><option value="merge">merge</option><option value="keep">keep</option><option value="fix">fix</option></select>
-    <input type="search" id="f-q" placeholder="search test id">
-    <label>near Jaccard ≥ <input type="range" id="f-j" max="1" step="0.001"> <output id="f-j-out"></output></label>
-    <span id="f-module"></span>
-    <span id="f-count" class="mute"></span>
-  </div>
-</div>
-<main id="view"></main>
-<div id="tip" hidden></div>
-<div id="toast"></div>
-<script type="application/json" id="model">__MODEL_JSON__</script>
-<script>
 'use strict';
 const M = JSON.parse(document.getElementById('model').textContent);
 const { meta, files: F, regions: R, classes: CL, tests: T, candidates: C } = M;
-const KINDS = ['duplicate', 'subsumed', 'near'];
-// fix: the test's name or doc comment promises a check its body never makes. Not a removal.
-const VERDICTS = ['cut', 'merge', 'keep', 'fix'];
-const VERDICT_RANK = { '': 0, keep: 1, fix: 2, merge: 3, cut: 4 };
-const OTHER_ROLE = { duplicate: 'keeper', subsumed: 'witness', near: 'near twin' };
+// Kinds, roles, and verdicts come from the Rust enums; verdicts arrive resolved per candidate and test.
+const KINDS = meta.kinds.map(k => k.kind);
+const OTHER_ROLE = Object.fromEntries(meta.kinds.map(k => [k.kind, k.other_role]));
+const VERDICT_RANK = Object.fromEntries([['', 0], ...meta.verdicts.map(v => [v.verdict, v.rank])]);
 // GRAPH_CAP bounds the nodes handed to cytoscape. Above COLLAPSE_AT the graph starts with file groups
 // collapsed, so the visible node count stays near the number of files.
 const PAGE = 50, GRAPH_CAP = 2000, COLLAPSE_AT = 120, UPSET_MAX = 8, LIST_CAP = 300;
@@ -217,20 +67,8 @@ async function copyText(text) {
   }
 }
 
-// ---------- verdicts: keyed by (candidate id, other id); later records overwrite earlier ones
-const verdicts = new Map();
-function addVerdicts(records) {
-  let added = 0;
-  for (const v of records) {
-    if (v && typeof v.test === 'string' && typeof v.other === 'string' && VERDICTS.includes(v.verdict)) {
-      verdicts.set(v.test + '\n' + v.other, v);
-      added++;
-    }
-  }
-  return added;
-}
-const verdictOf = c => verdicts.get(T[c.test].id + '\n' + T[c.other].id);
-addVerdicts(M.verdicts ?? []);
+// ---------- verdicts: resolved by `dwd` from the ledger; null when the pair is unreviewed
+const verdictOf = c => c.verdict;
 
 // ---------- lazy indexes (built on first use; whole-model passes are too slow to run eagerly at 200k regions)
 const fileByPath = lazy(() => new Map(F.map((f, i) => [f.path, i])));
@@ -342,9 +180,10 @@ function foldedRows(n, shown, row) {
 
 // ---------- filters, sorting, filtered candidate list
 const filter = { kinds: new Set(KINDS), tier: '', file: '', verdict: '', module: '', q: '', minJ: meta.near_threshold ?? 0 };
-const sort = { key: 'kind', dir: 1 };
+// Default order is rank: the analysis order is the review order.
+const sort = { key: 'rank', dir: 1 };
 const SORTS = {
-  kind: c => KINDS.indexOf(c.kind), test: c => T[c.test].id, other: c => T[c.other].id, tier: c => T[c.test].tier,
+  rank: (c, ci) => ci, kind: c => KINDS.indexOf(c.kind), test: c => T[c.test].id, other: c => T[c.other].id, tier: c => T[c.test].tier,
   shared: c => c.shared, gap: c => c.gap, extra: c => c.extra, regions: c => T[c.test].regions,
   jaccard: c => c.jaccard, verdict: c => VERDICT_RANK[verdictOf(c)?.verdict ?? ''],
 };
@@ -369,30 +208,21 @@ function filtered() {
   });
   const key = SORTS[sort.key];
   out.sort((a, b) => {
-    const x = key(C[a]), y = key(C[b]);
-    return (x < y ? -1 : x > y ? 1 : 0) * sort.dir || C[a].gap - C[b].gap || a - b;
+    const x = key(C[a], a), y = key(C[b], b);
+    return (x < y ? -1 : x > y ? 1 : 0) * sort.dir || a - b;
   });
   return (filteredCache = out);
 }
 
-// Shell-quote a path for the copied command line.
-const shq = s => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${String(s).replace(/'/g, `'\\''`)}'`);
 function reviewPrompt(cis) {
-  const verdictLine = '{"test": "<candidate id>", "other": "<other id>", "verdict": "cut|merge|keep|fix", "reason": "<one sentence naming the concrete assertion difference>"}';
-  const recorder = `${meta.skill_path.replace(/\/?SKILL\.md$/, '') || '.'}/scripts/record_verdict.py`;
-  const record = meta.candidates_path
-    ? [
-      'Record verdicts with the validating recorder, not by hand. Pipe one JSON line per candidate into:',
-      `python3 ${shq(recorder)} --candidates ${shq(meta.candidates_path)} --verdicts ${shq(meta.verdicts_path)}`,
-      'Each line:', verdictLine,
-      'If the recorder reports invalid rows, correct them and pipe them in again.',
-    ]
-    : [`For each candidate, append one JSON line to ${meta.verdicts_path}:`, verdictLine];
   const lines = [
     `Review dead-weight test candidates in ${meta.repo}.`,
-    `Follow section "4. Review rules" of ${meta.skill_path}: read the candidate and the other test, compare assertions, decide cut, merge, keep, or fix.`,
-    "Use fix when a test's name or doc comment promises a check its body never makes; the reason names the missing check.",
-    ...record,
+    `Follow section "4. Review rules" of the dead-weight-tests skill: read the candidate and the other test, compare assertions, decide ${meta.verdicts.map(v => v.verdict).join(', ')}.`,
+    'Record verdicts with the validating recorder, not by hand. Pipe one JSON line per candidate into:',
+    meta.recorder,
+    'Each line:',
+    meta.verdict_line,
+    'If the recorder reports invalid rows, correct them and pipe them in again. `dwd verdict` re-renders the report after recording.',
     'Do not edit tests.',
     '',
     'Candidates:',
@@ -427,48 +257,24 @@ function route() {
   document.querySelectorAll('header nav a').forEach(a => a.classList.toggle('on', a.dataset.view === render));
   VIEWS[render](args, new URLSearchParams(qs));
 }
-function rerender() {
-  filteredCache = null;
-  view.leave?.();
-  view = { name: null };
-  route();
-}
 const notFound = what => mount('missing', `<section>${esc(what)} not found. <a href="#/overview">Back to overview</a></section>`);
 
 // ---------- overview
 function overview() {
-  const kinds = Object.fromEntries(KINDS.map(k => [k, 0]));
-  const vcount = { cut: 0, merge: 0, keep: 0, fix: 0, none: 0 };
-  let sameFile = 0;
-  for (const c of C) { kinds[c.kind]++; vcount[verdictOf(c)?.verdict ?? 'none']++; if (c.same_file) sameFile++; }
-  const unit = T.filter(t => t.tier === 'unit').length;
-  const covered = CL.reduce((n, cls) => n + cls.length, 0);
-  const cards = [
-    ['Tests', T.length], ['Unit', unit], ['Integration', T.length - unit], ['Regions', R.length], ['Covered regions', covered],
-    ['Files', F.length], ['Coverage classes', CL.length], ['Excluded test regions', meta.excluded_test_regions ?? 0],
-    ['Duplicate', kinds.duplicate], ['Subsumed', kinds.subsumed], [`Near (J ≥ ${meta.near_threshold})`, kinds.near], ['Same file', sameFile],
-    ['Cut', vcount.cut], ['Merge', vcount.merge], ['Keep', vcount.keep], ['Fix', vcount.fix], ['Unreviewed', vcount.none],
-    ['Skipped', meta.skipped?.length ?? 0], ['Empty', M.empty.length],
-  ];
-  const listCapped = (items, render) => items.slice(0, LIST_CAP).map(x => `<li>${render(x)}</li>`).join('')
-    + (items.length > LIST_CAP ? `<li class="mute">… ${num(items.length - LIST_CAP)} more</li>` : '');
   const th = (key, label, cls = '') => `<th data-sort="${key}" class="${cls}">${label}</th>`;
+  // The summary (stat cards, empty and skipped lists) is rendered by `dwd` into <template id="summary">.
   mount('overview', `
-    <section><h2>Summary</h2>
-      <div class="cards">${cards.map(([k, v]) => `<div class="card"><b>${num(v)}</b><span>${esc(k)}</span></div>`).join('')}</div>
-      ${M.empty.length ? `<details><summary>Tests with no covered non-test regions (${num(M.empty.length)})</summary><ul>${listCapped(M.empty, testLink)}</ul></details>` : ''}
-      ${meta.skipped?.length ? `<details><summary>Skipped tests (${num(meta.skipped.length)})</summary><ul>${listCapped(meta.skipped, esc)}</ul></details>` : ''}
-    </section>
+    ${$('#summary').innerHTML}
     <section><h2>Modules <select id="tm-mode">
         <option value="cand">colour: share of tests that are candidates</option>
-        <option value="verdict" ${verdicts.size ? 'selected' : ''}>colour: share of tests with a cut/merge verdict</option>
+        <option value="verdict" ${C.some(verdictOf) ? 'selected' : ''}>colour: share of tests with a cut/merge verdict</option>
       </select><span class="mute">size = tests · click a cell to filter by module</span></h2>
       <div id="treemap"></div><div class="legend" id="tm-legend"></div>
     </section>
     <section><h2>Candidates <span id="tb-count" class="mute"></span>
         <button id="copy-sel"></button><label><input type="checkbox" id="inc-rev" ${includeReviewed ? 'checked' : ''}> include reviewed</label></h2>
       <table class="grid" id="cand"><thead><tr>
-        ${th('kind', 'Kind')}${th('test', 'Candidate')}${th('tier', 'Tier')}${th('other', 'Other')}
+        ${th('rank', '#', 'num')}${th('kind', 'Kind')}${th('test', 'Candidate')}${th('tier', 'Tier')}${th('other', 'Other')}
         ${th('shared', 'Shared', 'num')}${th('gap', 'Gap', 'num')}${th('extra', 'Extra', 'num')}${th('regions', 'Regions', 'num')}
         ${th('jaccard', 'Jaccard', 'num')}${th('verdict', 'Verdict')}
       </tr></thead><tbody></tbody></table>
@@ -503,10 +309,10 @@ function renderTable() {
   page = Math.max(0, Math.min(page, pages - 1));
   $('#cand tbody').innerHTML = ids.slice(page * PAGE, (page + 1) * PAGE).map(ci => {
     const c = C[ci], t = T[c.test];
-    return `<tr class="click" data-ci="${ci}"><td>${kindBadge(c.kind)}</td><td><div class="clip">${testLink(c.test)}</div></td><td>${t.tier}</td>
+    return `<tr class="click" data-ci="${ci}"><td class="num">${ci}</td><td>${kindBadge(c.kind)}</td><td><div class="clip">${testLink(c.test)}</div></td><td>${t.tier}</td>
       <td><div class="clip">${testLink(c.other)}</div></td><td class="num">${num(c.shared)}</td><td class="num">${num(c.gap)}</td>
       <td class="num">${num(c.extra)}</td><td class="num">${num(t.regions)}</td><td class="num">${fmtJ(c.jaccard)}</td><td>${verdictBadge(verdictOf(c))}</td></tr>`;
-  }).join('') || '<tr><td colspan="10" class="mute">No candidates match the filters.</td></tr>';
+  }).join('') || '<tr><td colspan="11" class="mute">No candidates match the filters.</td></tr>';
   main.querySelectorAll('#cand th[data-sort]').forEach(th => {
     th.textContent = th.textContent.replace(/ [▲▼]$/, '') + (th.dataset.sort === sort.key ? (sort.dir > 0 ? ' ▲' : ' ▼') : '');
   });
@@ -576,15 +382,8 @@ const GRAPH_STYLE = [
   // Edges rerouted to a collapsed group: keep them, but drop the per-pair label so the overview stays legible.
   { selector: 'edge.via-group', style: { label: '', 'line-opacity': 0.45 } },
 ];
-// Strongest verdict over every candidate pair where the test is the candidate (cut > merge > fix > keep).
-function nodeVerdict(ti) {
-  let best = '';
-  for (const ci of candsAsTest().get(ti) ?? []) {
-    const v = verdictOf(C[ci])?.verdict ?? '';
-    if (VERDICT_RANK[v] > VERDICT_RANK[best]) best = v;
-  }
-  return best || 'none';
-}
+// Strongest verdict over the test's candidate pairs, resolved by `dwd`.
+const nodeVerdict = ti => T[ti].verdict ?? 'none';
 
 function graph() {
   mount('graph', `<div class="graph-bar"><span id="g-note"></span>
@@ -703,8 +502,8 @@ function focusMatches(query) {
 
 function renderGraph() {
   const nodes = new Set(), edges = [], ids = filtered();
-  // Walk the filtered (sorted) list and keep every edge whose endpoints still fit under the node cap.
-  for (const ci of ids) {
+  // Walk the filtered candidates in rank order and keep every edge whose endpoints still fit under the node cap.
+  for (const ci of [...ids].sort((a, b) => a - b)) {
     const c = C[ci], need = !nodes.has(c.test) + !nodes.has(c.other);
     if (nodes.size + need > GRAPH_CAP) continue;
     nodes.add(c.test);
@@ -793,7 +592,8 @@ function pair([ciArg], q) {
       <div class="row">
         <span>shared <b>${num(c.shared)}</b></span><span>gap (${role} only) <b>${num(c.gap)}</b></span>
         <span>extra (candidate only) <b>${num(c.extra)}</b></span><span>Jaccard <b>${fmtJ(c.jaccard)}</b></span>
-        ${c.kind === 'near' ? '' : `<span>${c.kind === 'duplicate' ? 'group size − 1' : 'strict supersets'} <b>${num(c.supersets)}</b></span>`}
+        ${c.group_size != null ? `<span>group size <b>${num(c.group_size)}</b></span>` : ''}
+        ${c.strict_supersets != null ? `<span>strict supersets <b>${num(c.strict_supersets)}</b></span>` : ''}
         ${c.same_file ? '<span><b>same file</b></span>' : ''}
       </div>
       ${v ? `<p><b>${esc(v.verdict)}</b>: ${esc(v.reason ?? '')}</p>` : ''}
@@ -1023,23 +823,6 @@ function initFilters() {
   $('#f-count').textContent = `${num(filtered().length)} of ${num(C.length)} candidates`;
 }
 
-function updateVerdictStatus() {
-  $('#verdict-status').textContent = `${num(verdicts.size)} verdict${verdicts.size === 1 ? '' : 's'}`;
-}
-
-$('#verdict-file').addEventListener('change', async e => {
-  const input = e.target, text = await input.files[0]?.text();
-  input.value = '';
-  if (text == null) return;
-  const records = text.split('\n').filter(line => line.trim()).map(line => {
-    try { return JSON.parse(line); } catch { return null; }
-  });
-  const added = addVerdicts(records), skipped = records.length - added;
-  updateVerdictStatus();
-  toast(`Loaded ${added} verdicts${skipped ? `, skipped ${skipped} invalid line${skipped > 1 ? 's' : ''}` : ''}.`);
-  rerender();
-});
-
 // Line tooltips for code views that define box._tip(line); folded runs expand via box._row(line).
 const tip = $('#tip');
 function showTip(event, text) {
@@ -1070,11 +853,6 @@ main.addEventListener('change', e => {
   if (e.target.matches('input.upsel')) toggleUpset(Number(e.target.dataset.ti), e.target.checked);
 });
 
-$('#meta').textContent = `${meta.repo} · generated ${meta.generated}`;
-updateVerdictStatus();
 initFilters();
 window.addEventListener('hashchange', route);
 route();
-</script>
-</body>
-</html>

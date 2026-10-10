@@ -52,4 +52,10 @@ jobs:
           DISABLE_TELEMETRY=1 npx -y skills@1.7.0 add \
             "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/dead-weight-tests-$TAG.tar.gz" \
             --agent claude-code --yes
-          test -f .claude/skills/dead-weight-tests/scripts/analyze.py
+          test -f .claude/skills/dead-weight-tests/SKILL.md
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install dwd from the tag
+        run: |
+          cargo install --locked --git "https://github.com/$GITHUB_REPOSITORY" --tag "$TAG"
+          dwd --version | tee version.txt
+          grep -q "^dwd ${TAG#v}$" version.txt

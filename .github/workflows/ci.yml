@@ -10,17 +10,18 @@ permissions:
 
 jobs:
   check:
-    name: Unit tests, shellcheck, skill discovery
+    name: Unit tests, clippy, skill discovery
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-      - name: Analyzer unit tests
-        run: python -m unittest discover -s tests -v
-      - name: Shellcheck
-        run: shellcheck skills/dead-weight-tests/scripts/*.sh
+      # rustup installs the toolchain and components from rust-toolchain.toml.
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Unit tests
+        run: cargo test --workspace
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -34,24 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools-preview
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest,cargo-llvm-cov
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-      - name: Normal build first, as a developer's target directory would have
-        working-directory: tests/fixture
-        run: cargo test --no-run
-      - name: Find the planted dead weight
-        working-directory: tests/fixture
-        run: |
-          ../../skills/dead-weight-tests/scripts/collect.sh -- --workspace
-          python3 ../../skills/dead-weight-tests/scripts/analyze.py target/coverage/per-test/tests \
-            --out target/coverage/per-test/report.md \
-            --json target/coverage/per-test/candidates.json \
-            --html target/coverage/per-test/report.html
-          python3 ../check_fixture.py
+      # The same dev shell as `nix develop` / direnv locally.
+      - uses: cachix/install-nix-action@v31
+      - name: Find the planted dead weight in dwd-fixture
+        run: nix develop --command cargo test --test fixture_e2e -- --ignored
