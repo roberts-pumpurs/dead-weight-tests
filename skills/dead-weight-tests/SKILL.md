@@ -1,14 +1,14 @@
 ---
 name: dead-weight-tests
 description: >-
-  Use when looking for redundant, low-value, or LLM-generated tests to cut in a Rust project that runs tests with cargo-nextest. Triggers include "dead weight tests", "redundant tests", "test redundancy", "which tests can we delete", "tests covered by other tests", or per-test coverage analysis. Collects per-test region coverage, finds tests whose coverage duplicates, is contained in, or nearly matches another test, renders an interactive HTML report, and records reviewed cut verdicts.
+  Find dead-weight tests in a Rust workspace that runs cargo-nextest: tests whose coverage duplicates, sits inside, or nearly matches another test's. Use when asked for dead-weight, redundant, or deletable tests, or when handed a review prompt copied from a dwd report.
 metadata:
   version: "0.2.1" # x-release-please-version
 ---
 
 # Dead-weight tests
 
-Find tests that execute nothing another test does not already execute. Coverage finds the suspects. You decide each verdict by reading the tests.
+Coverage finds suspects. You decide each verdict by reading both tests. The `dwd` CLI does the coverage work.
 
 Run `dwd --version` first. If the command is missing, install it:
 
@@ -16,84 +16,58 @@ Run `dwd --version` first. If the command is missing, install it:
 cargo install --locked --git https://github.com/roberts-pumpurs/dead-weight-tests dead-weight-tests
 ```
 
-`dwd` needs `cargo-nextest`, `cargo-llvm-cov`, and the `llvm-tools-preview` component of the toolchain the workspace uses. A workspace that pins a toolchain in `rust-toolchain.toml` needs the component for that toolchain: run `rustup component add llvm-tools-preview` inside the workspace. A Nix dev shell needs `llvm-tools-preview` in its rust-overlay or fenix toolchain. `dwd collect` checks this before it runs the tests. If the project builds only inside its dev shell, run `dwd` there.
+`dwd` also needs `cargo-nextest`, `cargo-llvm-cov`, and the `llvm-tools-preview` component of the workspace's toolchain. `dwd collect` checks the toolchain and names the fix.
+
+## Two ways in
+
+- **Find dead weight**: the user asks for dead-weight, redundant, or deletable tests. Run steps 1 to 5 in order. The run is done when you present the step 5 summary.
+- **Review prompt**: the user pastes a prompt copied from a dwd report. It lists candidates and a `dwd … verdict` command. Apply step 3 to every listed candidate, then record the verdicts with step 4, using the command from the prompt. The run is done when the recorder reports no invalid rows and no missing pairs. Then tell the user what you recorded.
 
 ## Terms
 
 - **Region**: an LLVM code region: file, start line and column, end line and column.
-- **Test code**: files under `tests/` or `benches/`, `tests.rs`/`*_tests.rs`/`*_test.rs` files, and `#[cfg(test)]` modules. The analyzer ignores it, because every test runs its own body.
+- **Test code**: files under `tests/` or `benches/`, `test.rs`/`tests.rs`/`*_test.rs`/`*_tests.rs` files, and `#[cfg(test)]` modules. The analysis ignores it, because every test runs its own body.
 - **Coverage set**: the non-test-code regions one test executes, including regions run by workspace binaries it spawns.
-- **Duplicate**: a test with the same coverage set as another test. The **keeper** is the one the analyzer keeps (a unit test when the group has one).
+- **Duplicate**: a test with the same coverage set as another test. The **keeper** is the one the analysis keeps (a unit test when the group has one).
 - **Subsumed**: a test whose coverage set is a strict subset of another test's. The **witness** is the smallest such test.
 - **Near duplicate**: two tests whose coverage sets have a Jaccard similarity of at least `--near` (default 0.95), where neither contains the other. The smaller test is the candidate; the other is its **twin**.
 - **Gap**: the regions the other test executes beyond the candidate.
 - **Candidate**: a duplicate, subsumed, or near-duplicate test. A candidate is a suspect, not a verdict.
-- **Verdict**: cut, merge, keep, or fix for one candidate, with a one-sentence reason, stored in `verdicts.jsonl`.
+- **Verdict**: cut, merge, keep, or fix for one candidate, with a one-sentence reason.
 
 ## 1. Collect coverage
 
-Run from anywhere inside the workspace, or pass `-C DIR`:
+Run from anywhere inside the workspace, or pass `-C DIR`. Arguments after `--` go to `cargo nextest run`:
 
 ```sh
-dwd collect -- --workspace                      # every test nextest runs
 dwd collect -- -p my-crate                      # one package
 dwd collect -- --workspace -E 'test(/parser/)'  # a filterset
+dwd collect -- --workspace                      # every test nextest runs
 ```
 
-- Arguments after `--` go to `cargo nextest run`. `dwd collect` adds `--no-fail-fast`.
-- `--nextest CMD` replaces `cargo nextest run`, for projects that wrap nextest in a script. The wrapper must pass its arguments through to `cargo nextest run`.
-- `--before CMD` runs with `bash -c` after coverage is enabled and before the tests. Use it to build binaries that tests spawn from another package, so those binaries are instrumented too.
-- Each test gets its own profile through a nextest target runner. If the project's `.config/nextest.toml` defines wrapper scripts, tests behind a wrapper write no coverage unless each wrapper has `target-runner = "within-wrapper"`. Do not edit the repo config. Copy it to an overlay, add the setting there, and pass the overlay through `--nextest`:
+- Pick the scope first. Every test needs its own `llvm-cov export`, so a scoped run is faster. A scoped run finds witnesses only inside its scope, so a test with no witness in scope may still be redundant. Run the whole workspace when the user asks for it.
+- The step is done when `dwd collect` prints the artifact directory. Read [references/collect.md](references/collect.md) when collect fails, when it reports skipped tests, or when the project's `.config/nextest.toml` defines wrapper or setup scripts.
+- The artifact directory defaults to `<OS temp dir>/dwd/<workspace name>-<hash>/`, and the OS deletes it when it cleans its temp dir, verdicts included. To keep verdicts across reboots, pass the same `--dir DIR` (or set `DWD_DIR`) on every `dwd` command. `dwd path [report|candidates|verdicts|…]` prints a file's path.
 
-  ```sh
-  cp .config/nextest.toml /tmp/nextest-overlay.toml
-  # In the overlay, add target-runner = "within-wrapper" to each [scripts.wrapper.*] table.
-  dwd collect --nextest 'cargo nextest run --config-file /tmp/nextest-overlay.toml' -- --workspace
-  ```
-
-- Setup scripts inherit `RUSTC_WRAPPER`. A setup script that builds another target, such as wasm32, fails with `can't find crate for profiler_builtins`. In the overlay, prefix its command with `env -u RUSTC_WRAPPER`.
-- Instrumented tests run slower. Raise `slow-timeout` in the overlay for slow test groups, or they time out and land in `skipped.json`.
-- A scoped run only finds witnesses inside its scope. A test with no witness in scope may still be redundant. Prefer a scoped run unless the user asks for the whole workspace: every test needs its own `llvm-cov export`.
-- `dwd collect` first runs `cargo llvm-cov clean --workspace`: the coverage wrapper sits outside cargo's fingerprint, so artifacts from a normal build would otherwise be reused without instrumentation. Workspace crates rebuild with coverage. If a nextest wrapper needs prebuilt workspace binaries, build them with `--before`.
-- At the end of the run, `dwd collect` removes the instrumented workspace artifacts. The next normal build then rebuilds workspace crates. Do not copy or clone `target/` while a collection runs: the copy holds instrumented artifacts that a later build would reuse.
-- Output goes to the artifact directory, which `dwd collect` prints. The default is `<OS temp dir>/dwd/<workspace name>-<hash>/`. `dwd path` prints it, and `dwd path report|markdown|candidates|verdicts|analysis` prints one file in it. The OS removes it when it cleans its temp dir, `verdicts.jsonl` included. To keep verdicts across reboots, pass `--dir DIR` (or set `DWD_DIR`) on every `dwd` command.
-- The artifact directory holds `exports/` (one coverage set per passing test) and `skipped.json` (tests excluded because their coverage is partial or missing). Each skipped test has one `reason`: `failed` (with the exit code), `killed`, `no_profile`, `never_reached` (nextest selected the test but it never reached the runner), or `export_failed` (with the message).
-
-## 2. Analyze and render
+## 2. Analyze
 
 ```sh
 dwd analyze
 ```
 
-- `--near` sets the near-duplicate threshold (default 0.95). `--limit` sets how many candidates `report.md` lists (default 100), and `--graph-limit` how many its Mermaid graph draws (default 40).
-- Candidates are in rank order everywhere: same-file duplicates and subsets first, then the other duplicates and subsets by smallest gap, then near duplicates by Jaccard. Review them in that order: same-file pairs are the cheapest to judge and yield the most cuts.
-- `report.md`: summary, Mermaid graph, and the top `--limit` candidates.
-- `candidates.json`: every candidate, for agents. Each row has `same_file`: true when the candidate and the other test live in the same source file.
-- `report.html`: one self-contained page. It loads its graph and plotting libraries from a CDN. Views: overview treemap and candidate table, containment graph, pair view (both test bodies plus source lines colored by which test covers them), file view (tests per line), and test view (relations and an UpSet plot of overlaps). In the graph, click a test or edge to read its code; double-click opens the full page. The page shows the verdicts in `verdicts.jsonl`.
-- `dwd report` re-renders both reports from the stored analysis and the current verdicts, without a new analysis.
+It writes three reports into the artifact directory:
 
-## 3. Record verdicts lazily
+- `candidates.json`: every candidate with both test ids, locations, region counts, and `same_file`. Work from this file.
+- `report.md`: summary counts, a Mermaid containment graph, and the top candidates.
+- `report.html`: the interactive report for the user. Point them to `open "$(dwd path report)"`.
 
-Verdicts cost one review per candidate, so record them only for the candidates the user wants judged. The page has **Copy review prompt** buttons for one candidate and for the current filtered table. The user pastes the prompt into an agent. When you receive such a prompt, review each listed candidate with the rules in section 4 and record one line per candidate with `dwd verdict`. Do not append to `verdicts.jsonl` by hand. Each line looks like this:
+Candidates are in review order everywhere: same-file duplicates and subsets first, because they are the cheapest to judge and yield the most cuts, then the other duplicates and subsets by smallest gap, then near duplicates by Jaccard.
 
-```json
-{"test": "<candidate id>", "other": "<other id>", "verdict": "cut|merge|keep|fix", "reason": "<one sentence naming the concrete assertion difference>"}
-```
+## 3. Review rules
 
-Pass the lines as a file or on stdin. A JSON array of rows also works:
+For **Find dead weight**, review every same-file candidate, then continue in rank order until you have reviewed 20 candidates or reached the end of the list. Review more when the user asks. With more than about 30 candidates to review, split them into batches by source file and give each batch to a read-only subagent that applies these rules.
 
-```sh
-dwd verdict my-verdicts.jsonl
-dwd verdict < my-verdicts.jsonl
-```
-
-It appends only rows whose pair is a candidate, whose verdict is valid, and whose reason is not empty. It prints JSON with `recorded`, `invalid` (line number and error), and `missing`. Pass `--expect FILE`, a JSON list of the candidate rows you were asked to judge, to list pairs that still have no verdict. It exits 1 if any row is invalid or any expected pair is missing. Fix the reported rows and run it again.
-
-Later lines win for the same pair. `dwd verdict` re-renders `report.md` and `report.html`, so the page shows new verdicts after a reload. For more than about 30 candidates, split them into batches by source file and review the batches in parallel with read-only subagents.
-
-## 4. Review rules
-
-Coverage shows what a test executes, not what it asserts. For each candidate, open the candidate and its witness, keeper, or twin, and compare them.
+Coverage shows what a test executes, not what it asserts. For each candidate, open the candidate and its keeper, witness, or twin, and compare their assertions.
 
 Recommend **cut** when the candidate's assertions are weaker than, or the same as, the other test's assertions on the same behavior. Typical LLM dead weight:
 
@@ -101,9 +75,9 @@ Recommend **cut** when the candidate's assertions are weaker than, or the same a
 - re-checks a constructor, getter, default value, or serde round trip that the other test already asserts
 - copies another test with renamed variables and the same inputs
 
-Recommend **merge** when the candidate has one small distinct assertion that fits into the other test. Name the assertion to move. A merge moves one or two assertions. If one keeper would absorb more than two candidates, record keep or fix for the extras and say so in the reason. Do not fold them all into one test.
+Recommend **merge** when the candidate has one small distinct assertion that fits into the other test. Name the assertion to move. A merge moves one or two assertions. One keeper absorbs at most two merges: record keep or fix for the extras, and say why in the reason.
 
-Recommend **fix** when the candidate's name or doc comment promises a check its body never makes, for example `parses_for_non_utc_offset` that never passes a non-UTC offset. Recommend rewriting the body to check the promise, or renaming the test. Do not cut it.
+Recommend **fix** when the candidate's name or doc comment promises a check its body never makes, for example `parses_for_non_utc_offset` that never passes a non-UTC offset. Recommend rewriting the body to check the promise, or renaming the test. A fix keeps the test.
 
 Recommend **keep** and state the reason when any of these is true:
 
@@ -114,16 +88,33 @@ Recommend **keep** and state the reason when any of these is true:
 
 Example: `error_names_the_offending_stage` is a duplicate of `malformed_paths_are_rejected`: both run the same regions. The keeper only checks `is_err()`. The duplicate checks the stage index and the message text. Keep it.
 
-For a near duplicate, read the regions each side adds (the report names their files). If the candidate's extra regions carry no distinct assertion, treat it like a subsumed test.
+For a near duplicate, read the regions each side adds (`report.md` names their files). If the candidate's extra regions carry no distinct assertion, judge it like a subsumed test.
 
 When the location is ambiguous or unknown (macro-generated tests), find the test by name before you judge it.
 
+## 4. Record verdicts
+
+Record every reviewed candidate with `dwd verdict`, which validates each row before it appends it to the ledger. One JSON line per candidate:
+
+```json
+{"test": "<candidate id>", "other": "<other id>", "verdict": "cut|merge|keep|fix", "reason": "<one sentence naming the concrete assertion difference>"}
+```
+
+```sh
+dwd verdict my-verdicts.jsonl   # or pipe the lines on stdin; a JSON array also works
+```
+
+- It appends rows whose pair is a candidate, whose verdict is valid, and whose reason is not empty. It prints JSON with `recorded`, `invalid` (line number and error), and `missing`, and exits 1 if any row is invalid or any expected pair is missing.
+- For a review prompt, write its pairs to a file as `[{"test": "…", "other": "…"}]` and pass `--expect FILE`: `missing` then lists the pairs that still have no verdict.
+- Correct the reported rows and run it again until it exits 0. Later lines win for the same pair.
+- `dwd verdict` re-renders `report.md` and `report.html`, so the user sees the verdicts after a page reload.
+
 ## 5. Present
 
-Do not edit tests in this step. Show the user:
+Show the user:
 
-1. The run scope, test counts, and skipped count from the report header.
-2. The containment graph for the candidates you reviewed (Mermaid from the report, or point the user to the HTML graph view).
+1. The run scope, test counts, and skipped count from the `report.md` summary.
+2. The containment graph for the candidates you reviewed: the Mermaid graph from `report.md`, or the graph view of `report.html`.
 3. A table of recommended cuts:
 
    | Test | Location | Kind | Witness / keeper | Why it is dead weight |
@@ -133,13 +124,13 @@ Do not edit tests in this step. Show the user:
 5. A short list of candidates you recommend keeping, each with its reason.
 6. The next action: which cuts to make first, or which scope to run next.
 
-Cut tests only after the user approves the list.
+This step changes no test. Cut tests only after the user approves the list.
 
 ## Limits
 
 - Regions are matched exactly. Code compiled with different features in different binaries may yield different regions for the same source.
 - Code behind test-only Cargo features in production files counts as covered code.
 - Nondeterministic paths (scheduler order, retries, random `HashMap` order) can add or drop a few regions. Near-duplicate detection catches some of these pairs.
-- Doctests are not included: nextest does not run them.
-- Children spawned with `env_clear()` lose `LLVM_PROFILE_FILE`. Their coverage is missing, and they write `default_*.profraw` into their working directory. That can break tests that inspect that directory.
+- Doctests are not included: nextest does not run them. Tests run on the host target only.
+- Children spawned with `env_clear()` lose `LLVM_PROFILE_FILE`. Their coverage is missing, and they write `default_*.profraw` into their working directory, which can break tests that inspect that directory.
 - Unix only.

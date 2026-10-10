@@ -216,14 +216,14 @@ function filtered() {
 
 function reviewPrompt(cis) {
   const lines = [
-    `Review dead-weight test candidates in ${meta.repo}.`,
-    `Follow section "4. Review rules" of the dead-weight-tests skill: read the candidate and the other test, compare assertions, decide ${meta.verdicts.map(v => v.verdict).join(', ')}.`,
-    'Record verdicts with the validating recorder, not by hand. Pipe one JSON line per candidate into:',
+    `Review dead-weight test candidates in ${meta.repo} with the dead-weight-tests skill ("Review prompt" way in).`,
+    `Apply its "Review rules" section: read the candidate and the other test, compare assertions, decide ${meta.verdicts.map(v => v.verdict).join(', ')}.`,
+    'Record every verdict with the validating recorder. Pipe one JSON line per candidate into:',
     meta.recorder,
     'Each line:',
     meta.verdict_line,
     'If the recorder reports invalid rows, correct them and pipe them in again. `dwd verdict` re-renders the report after recording.',
-    'Do not edit tests.',
+    'Leave the tests unchanged: this is a review.',
     '',
     'Candidates:',
   ];
