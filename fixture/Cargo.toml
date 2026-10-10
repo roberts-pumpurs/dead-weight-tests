@@ -1,0 +1,10 @@
+# A crate with planted dead weight. tests/fixture_e2e.rs runs dwd against it.
+[package]
+name = "dwd-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "describe"
+path = "src/bin/describe.rs"

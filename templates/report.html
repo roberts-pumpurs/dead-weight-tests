@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dead-weight tests</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.10.0/styles/github.min.css">
+<script src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/elkjs@0.9.3/lib/elk.bundled.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape-elk@2.3.0/dist/cytoscape-elk.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape-expand-collapse@4.1.1/cytoscape-expand-collapse.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape-navigator@2.0.2/cytoscape-navigator.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@upsetjs/bundle@1.11.0/dist/upsetjs.umd.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.10.0/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.10.0/languages/rust.min.js"></script>
+<style>
+{{ css|safe }}
+</style>
+</head>
+<body>
+<div id="top">
+  <header>
+    <h1>Dead-weight tests</h1>
+    <nav><a href="#/overview" data-view="overview">Overview</a> <a href="#/graph" data-view="graph">Graph</a></nav>
+    <span>{{ reviewed }} verdict{% if reviewed != 1 %}s{% endif %}</span>
+    <span class="meta">{{ repo }} · generated {{ generated }}</span>
+  </header>
+  <div id="filters">
+    <span>
+      {%- for kind in kinds %}
+      <label><input type="checkbox" data-kind="{{ kind.as_str() }}" checked> {{ kind.as_str() }}</label>
+      {%- endfor %}
+    </span>
+    <select id="f-tier"><option value="">any tier</option><option value="unit">unit</option><option value="integration">integration</option></select>
+    <select id="f-file" title="candidate and other test in the same source file"><option value="">any file</option><option value="same">same file</option><option value="different">different files</option></select>
+    <select id="f-verdict"><option value="">any verdict</option><option value="none">unreviewed</option><option value="reviewed">reviewed</option>
+      {%- for verdict in verdicts %}<option value="{{ verdict.as_str() }}">{{ verdict.as_str() }}</option>{% endfor -%}
+    </select>
+    <input type="search" id="f-q" placeholder="search test id">
+    <label>near Jaccard ≥ <input type="range" id="f-j" max="1" step="0.001"> <output id="f-j-out"></output></label>
+    <span id="f-module"></span>
+    <span id="f-count" class="mute"></span>
+  </div>
+</div>
+<main id="view"></main>
+<template id="summary">
+  <section><h2>Summary</h2>
+    <div class="cards">
+      {%- for (value, label) in cards %}
+      <div class="card"><b>{{ value }}</b><span>{{ label }}</span></div>
+      {%- endfor %}
+    </div>
+    {%- if !empty.is_empty() %}
+    <details><summary>Tests with no covered non-test regions ({{ empty.len() + empty_more }})</summary><ul>
+      {%- for (ti, id) in empty %}
+      <li><a href="#/test/{{ ti.get() }}" title="{{ id }}">{{ id }}</a></li>
+      {%- endfor %}
+      {%- if empty_more > 0 %}<li class="mute">… {{ empty_more }} more</li>{% endif %}
+    </ul></details>
+    {%- endif %}
+    {%- if !skipped.is_empty() %}
+    <details><summary>Skipped tests ({{ skipped.len() + skipped_more }})</summary><ul>
+      {%- for s in skipped %}
+      <li>{{ s }}</li>
+      {%- endfor %}
+      {%- if skipped_more > 0 %}<li class="mute">… {{ skipped_more }} more</li>{% endif %}
+    </ul></details>
+    {%- endif %}
+  </section>
+</template>
+<div id="tip" hidden></div>
+<div id="toast"></div>
+<script type="application/json" id="model">{{ model_json|safe }}</script>
+<script>
+{{ script|safe }}
+</script>
+</body>
+</html>

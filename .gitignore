@@ -1,2 +1,2 @@
-tests/fixture/target/
-__pycache__/
+/target
+/.direnv

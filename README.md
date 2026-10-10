@@ -15,49 +15,59 @@ npx skills add roberts-pumpurs/dead-weight-tests
 
 Then ask your agent to "find dead weight tests". It follows [`SKILL.md`](skills/dead-weight-tests/SKILL.md).
 
-Requirements in the target project: [`cargo-nextest`](https://nexte.st), [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov), the `llvm-tools-preview` rustup component, and Python 3. The scripts use only the Python standard library.
+Install the `dwd` binary the skill runs:
+
+```sh
+cargo install --locked --git https://github.com/roberts-pumpurs/dead-weight-tests
+```
+
+Requirements in the target project: [`cargo-nextest`](https://nexte.st), [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov), and the `llvm-tools-preview` rustup component. Unix only.
 
 ## How it works
 
 ```mermaid
 flowchart LR
-  A[collect.sh] -->|one LLVM profile per test| B[export.py]
-  B -->|llvm-cov export JSON per test| C[analyze.py]
+  A[dwd collect] -->|one LLVM profile per test| B[export per test]
+  B -->|covered regions per test| C[dwd analyze]
   C --> D[report.md + candidates.json]
   C --> E[report.html]
-  E -->|copy review prompt| F[agent runs record_verdict.py]
+  E -->|copy review prompt| F[agent runs dwd verdict]
   F -->|validated rows| G[verdicts.jsonl]
-  G --> E
+  G -->|re-render| E
 ```
 
-1. `collect.sh` turns on coverage instrumentation and runs nextest with a target runner. Nextest runs every test in its own process, and the runner gives each process its own profile directory. Subprocesses a test starts write to the same directory.
-2. `export.py` merges each test's profiles and exports its covered LLVM regions.
-3. `analyze.py` drops test code (every test runs its own body), groups regions that the same tests cover, and finds duplicate, subsumed, and near-duplicate tests. It writes a markdown report, a JSON candidate list, and a self-contained HTML report.
-4. The HTML report shows a module treemap, a containment graph, the two tests of a pair side by side with source lines colored by which test runs them, and per-line test counts. Its "Copy review prompt" button hands chosen candidates to an agent, which records cut, merge, keep, or fix verdicts through `record_verdict.py`. The recorder checks each pair against `candidates.json` and appends valid rows to `verdicts.jsonl`. A fix verdict means the test's name promises a check its body never makes.
+1. `dwd collect` turns on coverage instrumentation and runs nextest with `dwd` as the target runner. Nextest runs every test in its own process, and the runner gives each process its own profile directory. Subprocesses a test starts write to the same directory.
+2. When the tests finish, `dwd collect` sorts each test's profiles into passed, failed, killed, no profile, or never reached. It merges and exports the covered LLVM regions of each passing test, and lists the rest with their reason in `skipped.json`.
+3. `dwd analyze` drops test code (every test runs its own body), groups regions that the same tests cover, and finds duplicate, subsumed, and near-duplicate tests in review rank order. It writes a markdown report, a JSON candidate list, and a self-contained HTML report.
+4. The HTML report shows a module treemap, a containment graph, the two tests of a pair side by side with source lines colored by which test runs them, and per-line test counts. Its "Copy review prompt" button hands chosen candidates to an agent, which records cut, merge, keep, or fix verdicts through `dwd verdict`. `dwd verdict` checks each pair against the analysis, appends valid rows to `verdicts.jsonl`, and re-renders the reports. A fix verdict means the test's name promises a check its body never makes.
+
+Artifacts go to `<OS temp dir>/dwd/<workspace name>-<hash>/`. The OS removes them when it cleans its temp dir, verdicts included. Pass `--dir DIR` or set `DWD_DIR` to keep them.
 
 ## Usage without an agent
 
 ```sh
 cd your-workspace
-path/to/skills/dead-weight-tests/scripts/collect.sh -- --workspace
-python3 path/to/skills/dead-weight-tests/scripts/analyze.py target/coverage/per-test/tests \
-  --out target/coverage/per-test/report.md \
-  --json target/coverage/per-test/candidates.json \
-  --html target/coverage/per-test/report.html
-open target/coverage/per-test/report.html
+dwd collect -- --workspace
+dwd analyze
+open "$(dwd path report)"
 ```
+
+`dwd --help` lists every command and flag.
 
 ## Development
 
+`flake.nix` has a dev shell with everything the end-to-end test needs: the toolchain from `rust-toolchain.toml` (with `llvm-tools-preview`), `cargo-nextest`, and `cargo-llvm-cov`. With direnv, run `direnv allow` once; otherwise use `nix develop`.
+
 ```sh
-python3 -m unittest discover -s tests          # analyzer and recorder unit tests
-shellcheck skills/dead-weight-tests/scripts/*.sh
-cd tests/fixture && ../../skills/dead-weight-tests/scripts/collect.sh -- --workspace   # end-to-end
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all --check
+cargo test --test fixture_e2e -- --ignored   # end to end, inside the dev shell
 ```
 
-`tests/fixture` is a small crate with planted dead weight: a duplicate, a subsumed test, and a test that reaches the library only through a subprocess. CI runs the whole pipeline on it and checks that all three show up.
+`fixture/` is the `dwd-fixture` workspace member, a small crate with planted dead weight: a duplicate, a subsumed test, a near-duplicate pair, a test that reaches the library only through a subprocess, a test that fails on request, and a test that runs only test code. The table at the top of `fixture/src/lib.rs` lists them. The end-to-end test runs `dwd collect`, `analyze`, and `verdict` against it in a temporary target dir, checks that each planted case shows up, and checks that a normal build afterwards is not instrumented.
 
-Releases use [release-please](https://github.com/googleapis/release-please) and Conventional Commits. Merging the release PR tags the version, attaches a skill archive to the GitHub release, and installs the skill from GitHub with the skills CLI as a smoke test. skills.sh has no upload step: it lists public repositories from that install telemetry.
+Releases use [release-please](https://github.com/googleapis/release-please) and Conventional Commits. Merging the release PR bumps the `dead-weight-tests` version in `Cargo.toml`, `Cargo.lock`, and `SKILL.md` (not `dwd-fixture`), tags the version, attaches a skill archive to the GitHub release, and smoke-tests the release: it installs the skill with the skills CLI and `dwd` from the tag. skills.sh has no upload step: it lists public repositories from that install telemetry.
 
 Branch rules for `main` live in [`.github/rulesets/main.json`](.github/rulesets/main.json): squash-merged PRs only, both CI jobs green, signed commits, no force pushes or deletion; repository admins can bypass. The `Rulesets` workflow applies the file when it changes. It needs a `RULESETS_TOKEN` secret, a fine-grained token for this repository with "Administration: Read and write".
 

@@ -10,7 +10,13 @@ metadata:
 
 Find tests that execute nothing another test does not already execute. Coverage finds the suspects. You decide each verdict by reading the tests.
 
-`<skill-dir>` below is the directory that contains this file.
+Run `dwd --version` first. If the command is missing, install it:
+
+```sh
+cargo install --locked --git https://github.com/roberts-pumpurs/dead-weight-tests
+```
+
+`dwd` needs `cargo-nextest`, `cargo-llvm-cov`, and the `llvm-tools-preview` component of the toolchain the workspace uses. A workspace that pins a toolchain in `rust-toolchain.toml` needs the component for that toolchain: run `rustup component add llvm-tools-preview` inside the workspace. A Nix dev shell needs `llvm-tools-preview` in its rust-overlay or fenix toolchain. `dwd collect` checks this before it runs the tests. If the project builds only inside its dev shell, run `dwd` there.
 
 ## Terms
 
@@ -26,65 +32,64 @@ Find tests that execute nothing another test does not already execute. Coverage 
 
 ## 1. Collect coverage
 
-Requirements: `cargo-nextest`, `cargo-llvm-cov`, the `llvm-tools-preview` rustup component, and `python3`. Run from the workspace root:
+Run from anywhere inside the workspace, or pass `-C DIR`:
 
 ```sh
-<skill-dir>/scripts/collect.sh -- --workspace                      # every test nextest runs
-<skill-dir>/scripts/collect.sh -- -p my-crate                      # one package
-<skill-dir>/scripts/collect.sh -- --workspace -E 'test(/parser/)'  # a filterset
+dwd collect -- --workspace                      # every test nextest runs
+dwd collect -- -p my-crate                      # one package
+dwd collect -- --workspace -E 'test(/parser/)'  # a filterset
 ```
 
-- Arguments after `--` go to `cargo nextest run`. `collect.sh` adds `--no-fail-fast`.
+- Arguments after `--` go to `cargo nextest run`. `dwd collect` adds `--no-fail-fast`.
 - `--nextest CMD` replaces `cargo nextest run`, for projects that wrap nextest in a script. The wrapper must pass its arguments through to `cargo nextest run`.
-- `--before CMD` runs after coverage is enabled and before the tests. Use it to build binaries that tests spawn from another package, so those binaries are instrumented too.
+- `--before CMD` runs with `bash -c` after coverage is enabled and before the tests. Use it to build binaries that tests spawn from another package, so those binaries are instrumented too.
 - Each test gets its own profile through a nextest target runner. If the project's `.config/nextest.toml` defines wrapper scripts, tests behind a wrapper write no coverage unless each wrapper has `target-runner = "within-wrapper"`. Do not edit the repo config. Copy it to an overlay, add the setting there, and pass the overlay through `--nextest`:
 
   ```sh
-  mkdir -p target/coverage
-  cp .config/nextest.toml target/coverage/nextest-overlay.toml
+  cp .config/nextest.toml /tmp/nextest-overlay.toml
   # In the overlay, add target-runner = "within-wrapper" to each [scripts.wrapper.*] table.
-  <skill-dir>/scripts/collect.sh \
-    --nextest 'cargo nextest run --config-file target/coverage/nextest-overlay.toml' -- --workspace
+  dwd collect --nextest 'cargo nextest run --config-file /tmp/nextest-overlay.toml' -- --workspace
   ```
 
 - Setup scripts inherit `RUSTC_WRAPPER`. A setup script that builds another target, such as wasm32, fails with `can't find crate for profiler_builtins`. In the overlay, prefix its command with `env -u RUSTC_WRAPPER`.
 - Instrumented tests run slower. Raise `slow-timeout` in the overlay for slow test groups, or they time out and land in `skipped.json`.
 - A scoped run only finds witnesses inside its scope. A test with no witness in scope may still be redundant. Prefer a scoped run unless the user asks for the whole workspace: every test needs its own `llvm-cov export`.
-- `collect.sh` first runs `cargo llvm-cov clean --workspace`: the coverage wrapper sits outside cargo's fingerprint, so artifacts from a normal build would otherwise be reused without instrumentation. Workspace crates rebuild with coverage. If a nextest wrapper needs prebuilt workspace binaries, build them with `--before`.
-- At the end of the run, after export, `collect.sh` removes the instrumented workspace artifacts inside the coverage environment. The next normal build then rebuilds workspace crates. Do not copy or clone `target/` while a collection runs: the copy holds instrumented artifacts that a later build would reuse.
-- Output: `target/coverage/per-test/tests/*.json.gz` (one pruned `llvm-cov export` JSON per passing test) and `skipped.json` (failed or killed tests, and tests that never reached the runner, excluded because their coverage is partial or missing).
+- `dwd collect` first runs `cargo llvm-cov clean --workspace`: the coverage wrapper sits outside cargo's fingerprint, so artifacts from a normal build would otherwise be reused without instrumentation. Workspace crates rebuild with coverage. If a nextest wrapper needs prebuilt workspace binaries, build them with `--before`.
+- At the end of the run, `dwd collect` removes the instrumented workspace artifacts. The next normal build then rebuilds workspace crates. Do not copy or clone `target/` while a collection runs: the copy holds instrumented artifacts that a later build would reuse.
+- Output goes to the artifact directory, which `dwd collect` prints. The default is `<OS temp dir>/dwd/<workspace name>-<hash>/`. `dwd path` prints it, and `dwd path report|markdown|candidates|verdicts|analysis` prints one file in it. The OS removes it when it cleans its temp dir, `verdicts.jsonl` included. To keep verdicts across reboots, pass `--dir DIR` (or set `DWD_DIR`) on every `dwd` command.
+- The artifact directory holds `exports/` (one coverage set per passing test) and `skipped.json` (tests excluded because their coverage is partial or missing). Each skipped test has one `reason`: `failed` (with the exit code), `killed`, `no_profile`, `never_reached` (nextest selected the test but it never reached the runner), or `export_failed` (with the message).
 
 ## 2. Analyze and render
 
 ```sh
-python3 <skill-dir>/scripts/analyze.py target/coverage/per-test/tests \
-  --out target/coverage/per-test/report.md \
-  --json target/coverage/per-test/candidates.json \
-  --html target/coverage/per-test/report.html
+dwd analyze
 ```
 
-- `report.md`: summary, Mermaid graph, and the top `--limit` candidates (default 100), duplicates and subsumed by smallest gap, then near duplicates by Jaccard.
-- `candidates.json`: every candidate, for agents. Each row has `same_file`: true when the candidate and the other test live in the same source file. The report shows it too. Review same-file duplicates and subsets first: they are the cheapest to judge and yield the most cuts.
-- `report.html`: one self-contained page. It loads its graph and plotting libraries from a CDN. Views: overview treemap and candidate table, containment graph, pair view (both test bodies plus source lines colored by which test covers them), file view (tests per line), and test view (relations and an UpSet plot of overlaps). In the graph, click a test or edge to read its code; double-click opens the full page.
-- The page shows verdicts from `target/coverage/per-test/verdicts.jsonl` (next to the `tests/` directory) when it exists.
+- `--near` sets the near-duplicate threshold (default 0.95). `--limit` sets how many candidates `report.md` lists (default 100), and `--graph-limit` how many its Mermaid graph draws (default 40).
+- Candidates are in rank order everywhere: same-file duplicates and subsets first, then the other duplicates and subsets by smallest gap, then near duplicates by Jaccard. Review them in that order: same-file pairs are the cheapest to judge and yield the most cuts.
+- `report.md`: summary, Mermaid graph, and the top `--limit` candidates.
+- `candidates.json`: every candidate, for agents. Each row has `same_file`: true when the candidate and the other test live in the same source file.
+- `report.html`: one self-contained page. It loads its graph and plotting libraries from a CDN. Views: overview treemap and candidate table, containment graph, pair view (both test bodies plus source lines colored by which test covers them), file view (tests per line), and test view (relations and an UpSet plot of overlaps). In the graph, click a test or edge to read its code; double-click opens the full page. The page shows the verdicts in `verdicts.jsonl`.
+- `dwd report` re-renders both reports from the stored analysis and the current verdicts, without a new analysis.
 
 ## 3. Record verdicts lazily
 
-Verdicts cost one review per candidate, so record them only for the candidates the user wants judged. The page has **Copy review prompt** buttons for one candidate and for the current filtered table. The user pastes the prompt into an agent. When you receive such a prompt, review each listed candidate with the rules in section 4 and record one line per candidate with `record_verdict.py`. Do not append to `verdicts.jsonl` by hand. Each line looks like this:
+Verdicts cost one review per candidate, so record them only for the candidates the user wants judged. The page has **Copy review prompt** buttons for one candidate and for the current filtered table. The user pastes the prompt into an agent. When you receive such a prompt, review each listed candidate with the rules in section 4 and record one line per candidate with `dwd verdict`. Do not append to `verdicts.jsonl` by hand. Each line looks like this:
 
 ```json
 {"test": "<candidate id>", "other": "<other id>", "verdict": "cut|merge|keep|fix", "reason": "<one sentence naming the concrete assertion difference>"}
 ```
 
-Pipe the lines into the recorder:
+Pass the lines as a file or on stdin. A JSON array of rows also works:
 
 ```sh
-python3 <skill-dir>/scripts/record_verdict.py --candidates target/coverage/per-test/candidates.json < my-verdicts.jsonl
+dwd verdict my-verdicts.jsonl
+dwd verdict < my-verdicts.jsonl
 ```
 
-It appends only rows whose pair is in `candidates.json`, whose verdict is valid, and whose reason is not empty. It prints JSON with `recorded`, `invalid` (line number and error), and `missing`, and exits 1 if any row is invalid. `--verdicts` defaults to `verdicts.jsonl` next to the candidates file. Pass `--expect FILE`, a JSON list of the candidate rows you were asked to judge, to list pairs that still have no verdict. Fix the reported rows and run it again.
+It appends only rows whose pair is a candidate, whose verdict is valid, and whose reason is not empty. It prints JSON with `recorded`, `invalid` (line number and error), and `missing`. Pass `--expect FILE`, a JSON list of the candidate rows you were asked to judge, to list pairs that still have no verdict. It exits 1 if any row is invalid or any expected pair is missing. Fix the reported rows and run it again.
 
-Later lines win for the same pair. To show new verdicts, re-run the analyzer with `--html`, or load the file with the page's **Load verdicts.jsonl** button. For more than about 30 candidates, split them into batches by source file and review the batches in parallel with read-only subagents.
+Later lines win for the same pair. `dwd verdict` re-renders `report.md` and `report.html`, so the page shows new verdicts after a reload. For more than about 30 candidates, split them into batches by source file and review the batches in parallel with read-only subagents.
 
 ## 4. Review rules
 
@@ -137,3 +142,4 @@ Cut tests only after the user approves the list.
 - Nondeterministic paths (scheduler order, retries, random `HashMap` order) can add or drop a few regions. Near-duplicate detection catches some of these pairs.
 - Doctests are not included: nextest does not run them.
 - Children spawned with `env_clear()` lose `LLVM_PROFILE_FILE`. Their coverage is missing, and they write `default_*.profraw` into their working directory. That can break tests that inspect that directory.
+- Unix only.
