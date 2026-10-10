@@ -18,7 +18,7 @@ Then ask your agent to "find dead weight tests". It follows [`SKILL.md`](skills/
 Install the `dwd` binary the skill runs:
 
 ```sh
-cargo install --locked --git https://github.com/roberts-pumpurs/dead-weight-tests
+cargo install --locked --git https://github.com/roberts-pumpurs/dead-weight-tests dead-weight-tests
 ```
 
 Requirements in the target project: [`cargo-nextest`](https://nexte.st), [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov), and the `llvm-tools-preview` rustup component. Unix only.

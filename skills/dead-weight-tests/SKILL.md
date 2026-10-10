@@ -13,7 +13,7 @@ Find tests that execute nothing another test does not already execute. Coverage 
 Run `dwd --version` first. If the command is missing, install it:
 
 ```sh
-cargo install --locked --git https://github.com/roberts-pumpurs/dead-weight-tests
+cargo install --locked --git https://github.com/roberts-pumpurs/dead-weight-tests dead-weight-tests
 ```
 
 `dwd` needs `cargo-nextest`, `cargo-llvm-cov`, and the `llvm-tools-preview` component of the toolchain the workspace uses. A workspace that pins a toolchain in `rust-toolchain.toml` needs the component for that toolchain: run `rustup component add llvm-tools-preview` inside the workspace. A Nix dev shell needs `llvm-tools-preview` in its rust-overlay or fenix toolchain. `dwd collect` checks this before it runs the tests. If the project builds only inside its dev shell, run `dwd` there.
