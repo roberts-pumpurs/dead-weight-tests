@@ -19,7 +19,7 @@ cargo test --test fixture_e2e -- --ignored   # end to end, inside the dev shell
 
 Releases use [release-please](https://github.com/googleapis/release-please) and Conventional Commits: a `feat:` or `fix:` commit on `main` opens or updates the release PR. Merging the release PR bumps the `dead-weight-tests` version in `Cargo.toml`, `Cargo.lock`, and `SKILL.md` (not `dwd-fixture`), tags the version, attaches a skill archive to the GitHub release, and smoke-tests the release: it installs the skill with the skills CLI and `dwd` from the tag. skills.sh has no upload step: it lists public repositories from that install telemetry.
 
-The release PR comes from the Actions token, and PRs from that token start no workflows. So the Release workflow dispatches CI on the release PR branch, and the required checks run on it like on any other PR.
+The release PR's author is `github-actions[bot]`, so its CI runs wait for approval (`action_required`) and the required checks never report. The Release workflow approves them, and the PR then merges like any other. If a release PR still shows no checks, approve its run from the Actions tab.
 
 ## Branch rules
 
