@@ -56,6 +56,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Install dwd from the tag
         run: |
-          cargo install --locked --git "https://github.com/$GITHUB_REPOSITORY" --tag "$TAG"
+          cargo install --locked --git "https://github.com/$GITHUB_REPOSITORY" --tag "$TAG" dead-weight-tests
           dwd --version | tee version.txt
           grep -q "^dwd ${TAG#v}$" version.txt
