@@ -69,7 +69,9 @@ cargo test --test fixture_e2e -- --ignored   # end to end, inside the dev shell
 
 Releases use [release-please](https://github.com/googleapis/release-please) and Conventional Commits. Merging the release PR bumps the `dead-weight-tests` version in `Cargo.toml`, `Cargo.lock`, and `SKILL.md` (not `dwd-fixture`), tags the version, attaches a skill archive to the GitHub release, and smoke-tests the release: it installs the skill with the skills CLI and `dwd` from the tag. skills.sh has no upload step: it lists public repositories from that install telemetry.
 
-Branch rules for `main` live in [`.github/rulesets/main.json`](.github/rulesets/main.json): squash-merged PRs only, both CI jobs green, signed commits, no force pushes or deletion; repository admins can bypass. The `Rulesets` workflow applies the file when it changes. It needs a `RULESETS_TOKEN` secret, a fine-grained token for this repository with "Administration: Read and write".
+Branch rules for `main` live in [`.github/rulesets/main.json`](.github/rulesets/main.json): squash-merged PRs only, both CI jobs green, signed commits, no force pushes or deletion; repository admins can bypass. After a change to that file merges, apply it with an admin `gh` login: `.github/rulesets/apply.sh`. A required check that the file renames blocks every PR until you do.
+
+The release PR comes from the Actions token, and PRs from that token start no workflows. So the Release workflow dispatches CI on the release PR branch, and the required checks run on it like on any other PR.
 
 ## License
 
