@@ -3,7 +3,7 @@ name: dead-weight-tests
 description: >-
   Find dead-weight tests in a Rust workspace that runs cargo-nextest: tests whose coverage duplicates, sits inside, or nearly matches another test's. Use when asked for dead-weight, redundant, or deletable tests, or when handed a review prompt copied from a dwd report.
 metadata:
-  version: "0.2.1" # x-release-please-version
+  version: "0.2.2" # x-release-please-version
 ---
 
 # Dead-weight tests
