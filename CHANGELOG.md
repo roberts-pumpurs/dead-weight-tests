@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/roberts-pumpurs/dead-weight-tests/compare/v0.2.1...v0.2.2) (2026-10-10)
+
+
+### Bug Fixes
+
+* route copied review prompts to the skill's review path ([7ac6acd](https://github.com/roberts-pumpurs/dead-weight-tests/commit/7ac6acd6f956c537aa8a0a909873fbcacf81dd0d))
+
 ## [0.2.1](https://github.com/roberts-pumpurs/dead-weight-tests/compare/v0.2.0...v0.2.1) (2026-10-10)
 
 
