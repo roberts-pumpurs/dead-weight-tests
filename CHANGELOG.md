@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/roberts-pumpurs/dead-weight-tests/compare/v0.2.0...v0.2.1) (2026-10-10)
+
+
+### Bug Fixes
+
+* name the dead-weight-tests package in the dwd install command ([#7](https://github.com/roberts-pumpurs/dead-weight-tests/issues/7)) ([eddcd51](https://github.com/roberts-pumpurs/dead-weight-tests/commit/eddcd5188116411c0eb3a4474832df48936a8729))
+
 ## [0.2.0](https://github.com/roberts-pumpurs/dead-weight-tests/compare/v0.1.1...v0.2.0) (2026-10-10)
 
 
