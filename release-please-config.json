@@ -16,7 +16,7 @@
         {
           "type": "toml",
           "path": "Cargo.lock",
-          "jsonpath": "$.package[?(@.name==='dead-weight-tests')].version"
+          "jsonpath": "$.package[?(@.name.value==='dead-weight-tests')].version"
         },
         {
           "type": "generic",
