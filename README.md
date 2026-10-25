@@ -66,14 +66,18 @@ Out of reach: doctests, tests for non-host targets (wasm, cross builds), and cov
 ## How it works
 
 ```mermaid
-flowchart LR
-  A[dwd collect] -->|one LLVM profile per test| B[export per test]
-  B -->|covered regions per test| C[dwd analyze]
-  C --> D[report.md + candidates.json]
-  C --> E[report.html]
-  E -->|copy review prompt| F[agent runs dwd verdict]
-  F -->|validated rows| G[verdicts.jsonl]
-  G -->|re-render| E
+flowchart TD
+  A["Ask the agent to find dead weight tests"] --> B["dwd collect: per-test coverage"]
+  B --> C["dwd analyze: coverage overlap candidates"]
+  C --> D["report.md, candidates.json, report.html"]
+  D --> E["Agent reads both tests and relevant code<br/>and compares inputs and assertions"]
+  E --> F["dwd verdict: record cut, merge, keep, or fix<br/>and update the reports"]
+  F --> G["Agent presents recommendations and reasons"]
+  G -.->|Optional: copy a review prompt for more candidates| E
+  G --> H{"Do you approve the proposed test changes?"}
+  H -->|No| I["Leave tests unchanged"]
+  H -->|Yes| J["Agent applies only the approved changes"]
+  J --> K["Run the affected tests"]
 ```
 
 1. `dwd collect` turns on coverage instrumentation and runs nextest with `dwd` as the target runner. Nextest runs every test in its own process, and the runner gives each process its own profile directory. Subprocesses a test starts write to the same directory.
