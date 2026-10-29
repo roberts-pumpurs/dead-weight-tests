@@ -3,7 +3,7 @@ name: dead-weight-tests
 description: >-
   Find dead-weight tests in a Rust workspace that runs cargo-nextest: tests whose coverage duplicates, sits inside, or nearly matches another test's. Use when asked for dead-weight, redundant, or deletable tests, or when handed a review prompt copied from a dwd report.
 metadata:
-  version: "0.2.2" # x-release-please-version
+  version: "0.3.0" # x-release-please-version
 ---
 
 # Dead-weight tests
@@ -23,11 +23,11 @@ Verdicts persist per workspace. A new run on a workspace with earlier verdicts c
 
 Do this at the start of every run. It is fast when everything is in place.
 
-1. Run `dwd --version`. It must print `dwd 0.2.2`. <!-- x-release-please-version -->
+1. Run `dwd --version`. It must print `dwd 0.3.0`. <!-- x-release-please-version -->
    When the command is missing or prints another version, install the matching `dwd`. Tell the user first: it compiles from source and takes a few minutes.
 
    ```sh
-   cargo install --locked --force --git https://github.com/roberts-pumpurs/dead-weight-tests --tag v0.2.2 dead-weight-tests # x-release-please-version
+   cargo install --locked --force --git https://github.com/roberts-pumpurs/dead-weight-tests --tag v0.3.0 dead-weight-tests # x-release-please-version
    ```
 
    No `cargo`? Stop and tell the user to install Rust from <https://rustup.rs>.

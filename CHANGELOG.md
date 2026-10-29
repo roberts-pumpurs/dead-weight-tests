@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.0](https://github.com/roberts-pumpurs/dead-weight-tests/compare/v0.2.2...v0.3.0) (2026-10-29)
+
+
+### ⚠ BREAKING CHANGES
+
+* `dwd verdict --expect` takes inline JSON instead of a file. Artifacts default to $XDG_STATE_HOME/dwd (~/.local/state/dwd) instead of the temp dir. analysis.json is version 2: re-run `dwd analyze`.
+
+### Features
+
+* guide a skill-only install from setup to applied cuts ([360f93c](https://github.com/roberts-pumpurs/dead-weight-tests/commit/360f93c196c6235541fc0e843fd2366790bf3acc))
+
 ## [0.2.2](https://github.com/roberts-pumpurs/dead-weight-tests/compare/v0.2.1...v0.2.2) (2026-10-10)
 
 
