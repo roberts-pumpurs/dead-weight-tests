@@ -4,7 +4,9 @@ Reference for step 1 of the dead-weight-tests skill. Read it when `dwd collect` 
 
 ## Toolchain
 
-Run `dwd doctor` before `dwd collect`. It checks the workspace, cargo-nextest, cargo-llvm-cov, the llvm-tools of the toolchain the workspace selects, the dev shell, nextest wrapper scripts, and the artifact dir. It prints one line per check and the fix for each problem. It exits 1 when a check fails; warnings do not fail it. `dwd collect` runs the same tool checks and stops at the first failure.
+Run `dwd doctor` before `dwd collect`. It checks the workspace, cargo-nextest, cargo-llvm-cov, the llvm-tools of the toolchain the workspace selects, the target dir, the dev shell, nextest wrapper scripts, and the artifact dir. It prints one line per check and the fix for each problem. It exits 1 when a check fails; warnings do not fail it. `dwd collect` runs the same tool and target-dir checks and stops at the first failure.
+
+The target dir check fails when the workspace's target dir is a symlink to a missing directory. A target manager such as mbx leaves one after it evicts its store. `dwd collect` cannot create `<target>/dwd` under it. Recreate the destination the `fix:` line names, or set `CARGO_TARGET_DIR` to a real directory.
 
 A project that builds only inside its dev shell (system libraries, a C SDK) needs every `dwd` command inside that shell.
 

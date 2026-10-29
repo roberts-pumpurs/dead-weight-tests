@@ -32,7 +32,7 @@ Do this at the start of every run. It is fast when everything is in place.
 
    No `cargo`? Stop and tell the user to install Rust from <https://rustup.rs>.
 
-2. Run `dwd doctor` inside the workspace. It checks the workspace, `cargo-nextest`, `cargo-llvm-cov`, the LLVM tools of the workspace's toolchain, the dev shell, and nextest wrapper scripts. It prints one `ok`, `warn`, or `fail` line per check, and a `fix:` line under each warning and failure. It exits 1 when a check fails.
+2. Run `dwd doctor` inside the workspace. It checks the workspace, `cargo-nextest`, `cargo-llvm-cov`, the LLVM tools of the workspace's toolchain, the target dir, the dev shell, and nextest wrapper scripts. It prints one `ok`, `warn`, or `fail` line per check, and a `fix:` line under each warning and failure. It exits 1 when a check fails.
    - Run every fix command it prints, then run `dwd doctor` again. Repeat until it exits 0.
    - A dev-shell warning means the project builds inside a dev shell. Its `fix:` line names how to enter it (`direnv exec .`, `nix develop -c`, or `nix-shell --run`). Run every later `dwd` command that way, `dwd doctor` included.
    - A wrapper-script warning needs an overlay config. Read [references/collect.md](references/collect.md) before step 1.

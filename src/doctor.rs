@@ -109,6 +109,7 @@ pub fn tool_checks(workspace: &Path) -> Vec<Check> {
         cargo_tool(workspace, "nextest", "cargo-nextest"),
         cargo_tool(workspace, "llvm-cov", "cargo-llvm-cov"),
         llvm_tools(workspace),
+        target_dir(workspace),
     ]
 }
 
@@ -182,6 +183,59 @@ fn llvm_tools(workspace: &Path) -> Check {
             Check::problem(Status::Fail, NAME, format!("{err:#}"), fix)
         }
     }
+}
+
+/// Fails when the workspace's target dir is a dangling symlink, which
+/// `<target>/dwd` cannot be created under. Target managers such as mbx leave
+/// one behind after they evict the directory the link points to.
+fn target_dir(workspace: &Path) -> Check {
+    const NAME: &str = "target dir";
+    let target = match export::target_directory(workspace) {
+        Ok(target) => target,
+        Err(err) => {
+            return Check::problem(
+                Status::Fail,
+                NAME,
+                format!("{err:#}"),
+                "make `cargo metadata` succeed in the workspace",
+            );
+        }
+    };
+    match dangling_link(&target) {
+        None => Check::ok(NAME, target.display().to_string()),
+        Some((link, missing)) => Check::problem(
+            Status::Fail,
+            NAME,
+            format!(
+                "{} is a symlink to {}, which does not exist",
+                link.display(),
+                missing.display()
+            ),
+            format!(
+                "run `mkdir -p '{}'`, or set CARGO_TARGET_DIR to a real directory",
+                missing.display()
+            ),
+        ),
+    }
+}
+
+/// The symlink on `path` whose destination is missing, with that destination.
+/// A path that does not exist yet is fine: cargo creates it.
+fn dangling_link(path: &Path) -> Option<(PathBuf, PathBuf)> {
+    // The deepest ancestor that exists without following a final symlink.
+    // Every ancestor above it resolves, so only it can dangle.
+    let link = path
+        .ancestors()
+        .find(|p| std::fs::symlink_metadata(p).is_ok())?;
+    if std::fs::metadata(link).is_ok() {
+        return None;
+    }
+    let dest = std::fs::read_link(link).ok()?;
+    // A relative destination is relative to the link's directory.
+    let dest = link
+        .parent()
+        .map_or_else(|| dest.clone(), |dir| dir.join(&dest));
+    Some((link.to_owned(), dest))
 }
 
 /// How the workspace's dev shell is entered, by the file that defines it.
@@ -333,7 +387,28 @@ fn on_path(tool: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::wrappers_without_runner;
+    use std::os::unix::fs::symlink;
+
+    use super::{dangling_link, wrappers_without_runner};
+
+    #[test]
+    fn only_a_symlink_to_a_missing_dir_dangles() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        // Not built yet: cargo creates the dir.
+        assert_eq!(dangling_link(&root.join("target/dwd")), None);
+
+        let link = root.join("target");
+        symlink("store/gone", &link).unwrap();
+        let missing = root.join("store/gone");
+        assert_eq!(
+            dangling_link(&link.join("dwd")),
+            Some((link.clone(), missing.clone()))
+        );
+
+        std::fs::create_dir_all(&missing).unwrap();
+        assert_eq!(dangling_link(&link.join("dwd")), None);
+    }
 
     #[test]
     fn every_wrapper_needs_its_own_within_wrapper() {
