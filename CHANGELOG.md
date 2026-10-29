@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/roberts-pumpurs/dead-weight-tests/compare/v0.3.0...v0.3.1) (2026-10-29)
+
+
+### Bug Fixes
+
+* **doctor:** fail on a target dir symlink to a missing directory ([0361939](https://github.com/roberts-pumpurs/dead-weight-tests/commit/0361939a3c99d8347bb8975de022a8d626c61f15))
+
 ## [0.3.0](https://github.com/roberts-pumpurs/dead-weight-tests/compare/v0.2.2...v0.3.0) (2026-10-29)
 
 

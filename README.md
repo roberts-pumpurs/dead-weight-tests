@@ -20,7 +20,7 @@ Then ask your agent to "find dead weight tests". On the first run it installs `d
 
 ```sh
 cargo install --locked cargo-nextest cargo-llvm-cov
-cargo install --locked --git https://github.com/roberts-pumpurs/dead-weight-tests --tag v0.3.0 dead-weight-tests # x-release-please-version
+cargo install --locked --git https://github.com/roberts-pumpurs/dead-weight-tests --tag v0.3.1 dead-weight-tests # x-release-please-version
 rustup component add llvm-tools-preview   # inside your workspace, for its toolchain
 ```
 
