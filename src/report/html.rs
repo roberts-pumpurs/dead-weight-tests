@@ -3,23 +3,25 @@
 //! The page struct renders everything static (filters, summary cards, lists);
 //! [`PageModel`] is the data the script reads, embedded as JSON.
 
-use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::Result;
 use askama::Template;
 use serde::Serialize;
 
-use super::{covered_tiers, relation_counts, round4, verdict_of};
-use crate::analysis::{Analysis, CandidateKind, RegionKey, SourceFile, TestBody};
+use super::{Review, covered_tiers, relation_counts, round4, strongest_verdicts, verdict_of};
+use crate::analysis::{Analysis, CandidateKind, FileLoss, RegionKey, SourceFile, TestBody};
 use crate::artifacts::ArtifactDir;
 use crate::ids::{ClassIdx, RegionIdx, TestIdx};
 use crate::skipped::Skipped;
 use crate::test_id::{TestId, Tier};
-use crate::verdict::{self, LedgerContents, Verdict};
+use crate::verdict::{self, Judged, LedgerContents, Verdict, VerdictRecord};
 
 /// Longest list the summary prints before eliding the rest.
 const LIST_CAP: usize = 300;
+
+/// Files listed under the coverage-loss line.
+const LOSS_FILES: usize = 5;
 
 #[derive(Template)]
 #[template(path = "report.html")]
@@ -34,6 +36,10 @@ struct Page<'a> {
     verdicts: &'static [Verdict],
     reviewed: usize,
     cards: Vec<(String, String)>,
+    /// `Cuts and merges remove …`, when any exist.
+    loss_line: Option<String>,
+    /// Files losing the most regions, top first.
+    loss_files: Vec<FileLoss>,
     empty: Vec<(TestIdx, &'a TestId)>,
     empty_more: usize,
     skipped: &'a [Skipped],
@@ -107,7 +113,11 @@ struct PageCandidate<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     strict_supersets: Option<u32>,
     same_file: bool,
+    /// The fresh verdict; `None` when unreviewed or stale.
     verdict: Option<PageVerdict<'a>>,
+    /// The stale verdict, when a reviewed body changed since.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    previous: Option<PageVerdict<'a>>,
 }
 
 #[derive(Serialize)]
@@ -116,18 +126,23 @@ struct PageVerdict<'a> {
     reason: &'a str,
 }
 
+impl<'a> PageVerdict<'a> {
+    fn of(record: &'a VerdictRecord) -> Self {
+        Self {
+            verdict: record.verdict,
+            reason: &record.reason,
+        }
+    }
+}
+
 pub(super) fn render(
     analysis: &Analysis,
     ledger: &LedgerContents,
     dirs: &ArtifactDir,
 ) -> Result<String> {
     let model = page_model(analysis, ledger, dirs.root());
-    let reviewed = model
-        .candidates
-        .iter()
-        .filter(|c| c.verdict.is_some())
-        .count();
-    let cards = cards(analysis, &model);
+    let review = Review::of(analysis, ledger);
+    let cards = cards(analysis, &model, &review);
     let empty: Vec<(TestIdx, &TestId)> = analysis
         .tests
         .iter()
@@ -143,8 +158,10 @@ pub(super) fn render(
         generated: &analysis.generated,
         kinds: &CandidateKind::ALL,
         verdicts: &Verdict::ALL,
-        reviewed,
+        reviewed: review.reviewed,
         cards,
+        loss_line: review.loss_line(),
+        loss_files: review.loss.files.iter().take(LOSS_FILES).cloned().collect(),
         empty_more: empty.len().saturating_sub(LIST_CAP),
         empty: empty.into_iter().take(LIST_CAP).collect(),
         skipped: &analysis.skipped[..analysis.skipped.len().min(LIST_CAP)],
@@ -163,6 +180,7 @@ fn page_model<'a>(
         .iter()
         .map(|c| {
             let (group_size, strict_supersets) = relation_counts(c.relation);
+            let judged = verdict_of(analysis, ledger, c);
             PageCandidate {
                 kind: c.kind(),
                 test: c.test,
@@ -174,23 +192,13 @@ fn page_model<'a>(
                 group_size,
                 strict_supersets,
                 same_file: c.same_file,
-                verdict: verdict_of(analysis, ledger, c).map(|r| PageVerdict {
-                    verdict: r.verdict,
-                    reason: &r.reason,
-                }),
+                verdict: judged.and_then(Judged::fresh).map(PageVerdict::of),
+                previous: judged.and_then(Judged::stale).map(PageVerdict::of),
             }
         })
         .collect();
 
-    let mut strongest: BTreeMap<TestIdx, Verdict> = BTreeMap::new();
-    for c in &candidates {
-        if let Some(v) = &c.verdict {
-            let best = strongest.entry(c.test).or_insert(v.verdict);
-            if v.verdict.rank() > best.rank() {
-                *best = v.verdict;
-            }
-        }
-    }
+    let strongest = strongest_verdicts(analysis, ledger);
 
     let tests = analysis
         .tests
@@ -245,7 +253,7 @@ fn page_model<'a>(
 }
 
 /// The overview's stat cards: (value, label).
-fn cards(analysis: &Analysis, model: &PageModel) -> Vec<(String, String)> {
+fn cards(analysis: &Analysis, model: &PageModel, review: &Review) -> Vec<(String, String)> {
     let (unit, integration) = covered_tiers(&analysis.tests);
     let candidates = &model.candidates;
     let mut cards: Vec<(usize, String)> = vec![
@@ -279,10 +287,15 @@ fn cards(analysis: &Analysis, model: &PageModel) -> Vec<(String, String)> {
             .count();
         cards.push((n, capitalize(verdict.as_str())));
     }
-    cards.push((
-        candidates.iter().filter(|c| c.verdict.is_none()).count(),
-        "Unreviewed".into(),
-    ));
+    cards.push((review.reviewed, "Reviewed".into()));
+    cards.push((review.pending, "Pending".into()));
+    if review.stale > 0 {
+        cards.push((review.stale, "Stale (body changed)".into()));
+    }
+    if review.loss.removed > 0 {
+        cards.push((review.loss.removed, "Tests removed (cut/merge)".into()));
+        cards.push((review.loss.lost_regions, "Regions lost".into()));
+    }
     cards.push((analysis.skipped.len(), "Skipped".into()));
     cards.push((analysis.empty_tests().count(), "Empty".into()));
     cards

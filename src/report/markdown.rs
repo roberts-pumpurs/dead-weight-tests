@@ -6,12 +6,12 @@ use std::fmt::Write as _;
 use anyhow::Result;
 use askama::Template;
 
-use super::{MarkdownOptions, covered_tiers, location_string, relation_counts, verdict_of};
+use super::{MarkdownOptions, Review, covered_tiers, location_string, relation_counts, verdict_of};
 use crate::analysis::{Analysis, CandidateKind, Test};
 use crate::ids::{ClassIdx, TestIdx};
 use crate::skipped::Skipped;
 use crate::test_id::TestId;
-use crate::verdict::VerdictRecord;
+use crate::verdict::Judged;
 
 #[derive(Template)]
 #[template(path = "report.md")]
@@ -33,6 +33,14 @@ struct Page<'a> {
     near: usize,
     near_threshold: f64,
     same_file: usize,
+    reviewed: usize,
+    pending: usize,
+    /// Pending candidates whose verdict went stale.
+    stale: usize,
+    /// `Cuts and merges remove …`, when any exist.
+    loss_line: Option<String>,
+    /// Top files of the coverage loss, formatted.
+    loss_files: String,
     graph_shown: usize,
     mermaid: String,
     total: usize,
@@ -61,7 +69,7 @@ struct Entry<'a> {
     strict_supersets: Option<u32>,
     /// Files of the regions only the other test covers (subsumed) or only this test covers (near).
     diff_files: String,
-    verdict: Option<&'a VerdictRecord>,
+    verdict: Option<Judged<'a>>,
 }
 
 pub(super) fn render(
@@ -135,6 +143,7 @@ pub(super) fn render(
         })
         .collect();
 
+    let review = Review::of(analysis, verdicts);
     let page = Page {
         covered: unit + integration,
         unit,
@@ -152,6 +161,11 @@ pub(super) fn render(
         near: count(CandidateKind::Near),
         near_threshold: analysis.near_threshold,
         same_file: candidates.iter().filter(|c| c.same_file).count(),
+        reviewed: review.reviewed,
+        pending: review.pending,
+        stale: review.stale,
+        loss_line: review.loss_line(),
+        loss_files: review.loss_files(3),
         graph_shown: options.graph_limit.min(candidates.len()),
         mermaid: mermaid(analysis, options.graph_limit),
         total: candidates.len(),
@@ -252,6 +266,8 @@ mod tests {
             other: TestId::new("demo", "tests::big"),
             verdict: Verdict::Cut,
             reason: "asserts nothing the keeper does not".into(),
+            test_hash: None,
+            other_hash: None,
         };
         let mut ledger = LedgerContents::default();
         ledger

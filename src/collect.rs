@@ -2,17 +2,17 @@
 //!
 //! Enables cargo-llvm-cov's instrumentation environment, runs nextest with
 //! `dwd __runner` as the target runner, triages the profile directories, and
-//! exports one [`crate::export_format::TestExport`] per passing test. On exit,
-//! even after a failure or Ctrl-C, it removes the instrumented workspace
-//! artifacts so the next normal build rebuilds them.
+//! exports one [`crate::export_format::TestExport`] per passing test.
+//! Instrumented builds live in `<target>/dwd`, apart from normal builds, so
+//! both stay incremental.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result, bail};
 
 use crate::artifacts::ArtifactDir;
+use crate::doctor;
 use crate::export::{self, Env, LlvmTools};
 use crate::profile;
 use crate::runner::PROFILE_ROOT_ENV;
@@ -36,17 +36,17 @@ pub struct CollectSummary {
     pub skipped: usize,
 }
 
-/// Set by Ctrl-C or SIGTERM. Children share our process group, so Ctrl-C
-/// reaches them too; dwd survives to clean up.
-static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+/// Wrapper variables from `cargo llvm-cov show-env` that change codegen
+/// outside cargo's fingerprint.
+const STAMPED_VARS: [&str; 3] = [
+    "__CARGO_LLVM_COV_RUSTC_WRAPPER_RUSTFLAGS",
+    "__CARGO_LLVM_COV_RUSTC_WRAPPER_CRATE_NAMES",
+    "RUSTC_WRAPPER",
+];
 
 pub fn collect(options: &CollectOptions, dirs: &ArtifactDir) -> Result<CollectSummary> {
-    for tool in ["cargo-nextest", "cargo-llvm-cov"] {
-        if !on_path(tool) {
-            bail!("missing {tool} on PATH");
-        }
-    }
     let workspace = options.workspace.as_path();
+    doctor::require_tools(workspace)?;
     for dir in [dirs.profiles(), dirs.other(), dirs.exports()] {
         remove_dir(&dir)?;
         std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
@@ -60,20 +60,10 @@ pub fn collect(options: &CollectOptions, dirs: &ArtifactDir) -> Result<CollectSu
             "dwd's path {exe:?} contains whitespace; cargo splits runner commands on whitespace, so install dwd elsewhere"
         );
     }
-    // Export needs these after the tests; fail before a long run when they are missing.
     let tools = LlvmTools::locate(workspace)?;
-    let coverage_env = coverage_env(workspace)?;
-    // cargo-llvm-cov's RUSTC_WRAPPER adds -C instrument-coverage outside cargo's
-    // fingerprint, so artifacts of a normal build would be reused uninstrumented.
-    // The clean must run inside the coverage env: outside it, it cleans another dir.
-    llvm_cov_clean(workspace, &coverage_env)?;
-    let cleanup = Cleanup {
-        workspace,
-        env: &coverage_env,
-        done: false,
-    };
-    ctrlc::set_handler(|| INTERRUPTED.store(true, Ordering::SeqCst))
-        .context("install the Ctrl-C handler")?;
+    let target_dir = export::target_directory(workspace)?.join("dwd");
+    let coverage_env = coverage_env(workspace, &target_dir)?;
+    clean_if_flags_changed(workspace, &target_dir, &coverage_env)?;
 
     let mut env = coverage_env.clone();
     // Processes outside a test (build scripts, setup scripts, test listing) write here.
@@ -116,31 +106,20 @@ pub fn collect(options: &CollectOptions, dirs: &ArtifactDir) -> Result<CollectSu
     }
 
     let listed = list_tests(&words, options, workspace, &env);
-    check_interrupted()?;
     let triage = profile::triage(&dirs.profiles(), listed.as_ref())?;
-    // Needs the instrumented binaries for -object, so it runs before cleanup.
+    // Needs the instrumented binaries for -object.
     let bins = export::workspace_bins(workspace, &coverage_env)?;
     let mut skipped = triage.skipped;
     let failed = export::export_all(&triage.passed, &dirs.exports(), &tools, workspace, &bins)?;
-    // An interrupt during export turns into per-test failures; report the interrupt instead.
-    check_interrupted()?;
     let exported = triage.passed.len() - failed.len();
     skipped.extend(failed);
     write_skipped(&dirs.skipped(), &skipped)?;
     remove_dir(&dirs.profiles())?;
     remove_dir(&dirs.other())?;
-    cleanup.finish()?;
     Ok(CollectSummary {
         exported,
         skipped: skipped.len(),
     })
-}
-
-fn check_interrupted() -> Result<()> {
-    if INTERRUPTED.load(Ordering::SeqCst) {
-        bail!("interrupted");
-    }
-    Ok(())
 }
 
 /// The tests the nextest command selects, via `nextest list`. Best effort:
@@ -185,23 +164,26 @@ fn list_tests(
     }
 }
 
-/// Runs a child to completion; fails when Ctrl-C arrived meanwhile.
 fn run_status(command: &mut Command, workspace: &Path, env: &Env) -> Result<ExitStatus> {
-    let status = command
+    command
         .current_dir(workspace)
         .envs(env.iter().map(|(k, v)| (k, v)))
         .status()
-        .with_context(|| format!("run {command:?}"))?;
-    check_interrupted()?;
-    Ok(status)
+        .with_context(|| format!("run {command:?}"))
 }
 
-/// cargo-llvm-cov's environment for instrumenting workspace crates.
-fn coverage_env(workspace: &Path) -> Result<Vec<(String, String)>> {
+/// cargo-llvm-cov's environment for instrumenting workspace crates into
+/// `target_dir`, including `CARGO_TARGET_DIR` itself.
+fn coverage_env(workspace: &Path, target_dir: &Path) -> Result<Vec<(String, String)>> {
+    // Both dirs: `build.build-dir` (or CARGO_BUILD_BUILD_DIR) can move the
+    // fingerprints and intermediate artifacts out of the target dir, and they
+    // must not be shared with normal builds either.
+    let isolate = ["CARGO_TARGET_DIR", "CARGO_BUILD_BUILD_DIR"].map(|key| (key, target_dir));
     let show_env = |flag: &str| {
         Command::new("cargo")
             .args(["llvm-cov", "show-env", flag])
             .current_dir(workspace)
+            .envs(isolate)
             .output()
     };
     let output = match show_env("--sh")? {
@@ -214,7 +196,9 @@ fn coverage_env(workspace: &Path) -> Result<Vec<(String, String)>> {
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-    parse_show_env(&String::from_utf8(output.stdout)?)
+    let mut env = parse_show_env(&String::from_utf8(output.stdout)?)?;
+    env.extend(isolate.map(|(key, dir)| (key.into(), path_string(dir))));
+    Ok(env)
 }
 
 /// Parses `export KEY=VALUE` lines, unquoting values with shell rules.
@@ -233,7 +217,26 @@ fn parse_show_env(text: &str) -> Result<Vec<(String, String)>> {
         .collect()
 }
 
-fn llvm_cov_clean(workspace: &Path, env: &Env) -> Result<()> {
+/// The stamp content for `env`: one `KEY=VALUE` line per [`STAMPED_VARS`] entry.
+fn stamp(env: &Env) -> String {
+    STAMPED_VARS
+        .iter()
+        .map(|key| {
+            let value = env.iter().find(|(k, _)| k == key).map_or("", |(_, v)| v);
+            format!("{key}={value}\n")
+        })
+        .collect()
+}
+
+/// Cleans the workspace crates in `target_dir` when the wrapper flags differ
+/// from the last run's, since cargo's fingerprint misses them.
+fn clean_if_flags_changed(workspace: &Path, target_dir: &Path, env: &Env) -> Result<()> {
+    let path = target_dir.join("dwd-flags");
+    let stamp = stamp(env);
+    if std::fs::read_to_string(&path).ok().as_deref() == Some(stamp.as_str()) {
+        return Ok(());
+    }
+    // Inside the coverage env, so it cleans target_dir.
     let status = Command::new("cargo")
         .args(["llvm-cov", "clean", "--workspace"])
         .current_dir(workspace)
@@ -243,45 +246,9 @@ fn llvm_cov_clean(workspace: &Path, env: &Env) -> Result<()> {
     if !status.success() {
         bail!("cargo llvm-cov clean --workspace failed with {status}");
     }
-    Ok(())
-}
-
-/// Removes the instrumented workspace artifacts when collect ends, however it
-/// ends, so a normal build never reuses them. [`Cleanup::finish`] reports a
-/// failed clean as an error; on early returns, `Drop` cleans and warns.
-struct Cleanup<'a> {
-    workspace: &'a Path,
-    env: &'a Env,
-    done: bool,
-}
-
-impl Cleanup<'_> {
-    fn finish(mut self) -> Result<()> {
-        self.done = true;
-        self.clean()
-    }
-
-    fn clean(&self) -> Result<()> {
-        eprintln!("dwd: removing coverage-instrumented workspace artifacts");
-        llvm_cov_clean(self.workspace, self.env).context(
-            "run it under `eval \"$(cargo llvm-cov show-env --sh)\"` before a normal build",
-        )
-    }
-}
-
-impl Drop for Cleanup<'_> {
-    fn drop(&mut self) {
-        if !self.done
-            && let Err(error) = self.clean()
-        {
-            eprintln!("dwd: {error:#}");
-        }
-    }
-}
-
-fn on_path(tool: &str) -> bool {
-    std::env::var_os("PATH")
-        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(tool).is_file()))
+    std::fs::create_dir_all(target_dir)
+        .with_context(|| format!("create {}", target_dir.display()))?;
+    std::fs::write(&path, stamp).with_context(|| format!("write {}", path.display()))
 }
 
 fn path_string(path: &Path) -> String {

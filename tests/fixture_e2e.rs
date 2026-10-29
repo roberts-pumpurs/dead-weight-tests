@@ -1,6 +1,6 @@
 //! End to end: `dwd` collects, analyzes, and records a verdict for the dead
 //! weight planted in the `dwd-fixture` workspace member (see fixture/src/lib.rs),
-//! and leaves no instrumented artifacts behind.
+//! keeps its instrumented build in `<target>/dwd`, and reuses it on a rerun.
 //!
 //! Needs cargo-nextest, cargo-llvm-cov, and llvm-tools-preview: run it inside
 //! `nix develop` (or direnv) with `cargo test --test fixture_e2e -- --ignored`.
@@ -26,8 +26,7 @@ struct CandidateRow {
 /// One end-to-end run: its own target dir and artifact dir.
 ///
 /// The separate target dir keeps the inner cargo off the outer `cargo test`'s
-/// build lock, and keeps `cargo llvm-cov clean --workspace` away from this
-/// crate's own binaries.
+/// build lock.
 struct Run {
     tmp: tempfile::TempDir,
 }
@@ -105,15 +104,48 @@ fn finds_the_planted_dead_weight() {
     };
 
     // A normal build first, as a developer's target dir would have: collect
-    // must replace these uninstrumented artifacts.
+    // must not reuse these uninstrumented artifacts.
     run.cargo(&["build", "--quiet", "-p", "dwd-fixture", "--all-targets"]);
 
-    let status = run
-        .dwd(&["collect", "--", "-p", "dwd-fixture"])
-        .env("DWD_FIXTURE_FAIL", "1")
-        .status()
-        .unwrap();
-    assert!(status.success(), "dwd collect failed: {status}");
+    let collect = || {
+        let start = std::time::Instant::now();
+        let output = run
+            .dwd(&["collect", "--", "-p", "dwd-fixture"])
+            .env("DWD_FIXTURE_FAIL", "1")
+            .stdout(Stdio::inherit())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        eprint!("{stderr}");
+        eprintln!("dwd collect took {:?}", start.elapsed());
+        assert!(
+            output.status.success(),
+            "dwd collect failed: {}",
+            output.status
+        );
+        stderr
+    };
+    collect();
+    let instrumented_describe = run.target().join("dwd/debug/describe");
+    assert!(
+        instrumented(&instrumented_describe),
+        "{} is not coverage-instrumented",
+        instrumented_describe.display()
+    );
+    let mtime = || {
+        std::fs::metadata(&instrumented_describe)
+            .unwrap()
+            .modified()
+            .unwrap()
+    };
+    let built = mtime();
+    // A rerun reuses the instrumented build instead of rebuilding the workspace.
+    let stderr = collect();
+    assert_eq!(mtime(), built, "the rerun rebuilt describe");
+    assert!(
+        !stderr.contains("Compiling dwd-fixture"),
+        "the rerun recompiled dwd-fixture:\n{stderr}"
+    );
     // The near pair differs by one branch out of about ten, so lower the threshold.
     let status = run.dwd(&["analyze", "--near", "0.8"]).status().unwrap();
     assert!(status.success(), "dwd analyze failed: {status}");
@@ -215,8 +247,7 @@ fn finds_the_planted_dead_weight() {
             .contains("- Verdict: cut. same assertion shape")
     );
 
-    // Cargo's fingerprint ignores the coverage wrapper, so collect must remove its
-    // instrumented artifacts or the next normal build reuses them.
+    // Collect builds into target/dwd, so a normal build never reuses its artifacts.
     run.cargo(&["build", "--quiet", "-p", "dwd-fixture", "--bin", "describe"]);
     let describe = run.target().join("debug/describe");
     assert!(

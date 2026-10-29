@@ -7,16 +7,17 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-use dead_weight_tests::analysis::{self, Analysis, DEFAULT_NEAR};
+use dead_weight_tests::analysis::{self, Analysis, CoverageLoss, DEFAULT_NEAR};
 use dead_weight_tests::artifacts::{ArtifactDir, workspace_root};
 use dead_weight_tests::collect::{self, CollectOptions};
-use dead_weight_tests::report::{self, MarkdownOptions};
+use dead_weight_tests::doctor;
+use dead_weight_tests::report::{self, MarkdownOptions, Review};
 use dead_weight_tests::runner;
 use dead_weight_tests::skipped::read_skipped;
 use dead_weight_tests::test_id::TestId;
-use dead_weight_tests::verdict::{Ledger, Pair};
+use dead_weight_tests::verdict::{Ledger, Pair, RecordSummary};
 
 /// Hidden subcommand nextest calls as the target runner.
 const RUNNER_SUBCOMMAND: &str = "__runner";
@@ -25,7 +26,8 @@ const RUNNER_SUBCOMMAND: &str = "__runner";
 #[derive(Parser)]
 #[command(name = "dwd", version, about)]
 struct Cli {
-    /// Artifact directory. Default: <temp dir>/dwd/<workspace>-<hash>.
+    /// Artifact directory. Default: $XDG_STATE_HOME/dwd/<workspace>-<hash>
+    /// (without XDG_STATE_HOME: ~/.local/state/dwd/<workspace>-<hash>).
     #[arg(long, global = true, env = "DWD_DIR")]
     dir: Option<PathBuf>,
 
@@ -37,8 +39,19 @@ struct Cli {
     command: Command,
 }
 
+/// Every subcommand. Only `doctor` runs without a resolved workspace: it
+/// reports a missing one as a failed check.
 #[derive(Subcommand)]
 enum Command {
+    /// Check the tools and setup `dwd collect` needs; print one line per check with its fix.
+    Doctor,
+    #[command(flatten)]
+    Workspace(WorkspaceCommand),
+}
+
+/// Subcommands that need the Cargo workspace and its artifact directory.
+#[derive(Subcommand)]
+enum WorkspaceCommand {
     /// Run the tests with coverage and export one coverage set per passing test.
     Collect {
         /// Command that runs nextest; it must pass its arguments to `cargo nextest run`.
@@ -69,9 +82,16 @@ enum Command {
     Verdict {
         /// Input file. Default: stdin.
         input: Option<PathBuf>,
-        /// JSON list of candidate rows that must all have a verdict afterwards.
+        /// Inline JSON array of `{"test": …, "other": …}` rows (extra fields
+        /// ignored) that must all have a verdict afterwards.
         #[arg(long)]
-        expect: Option<PathBuf>,
+        expect: Option<String>,
+    },
+    /// Print candidates without a current verdict (none, or a changed test body), one per line, in review order.
+    Pending {
+        /// Most candidates printed.
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
     },
     /// Print the path of an artifact.
     Path {
@@ -135,13 +155,27 @@ fn exit_with(result: Result<i32>) -> ExitCode {
 
 fn run(cli: Cli) -> Result<i32> {
     let cwd = std::env::current_dir()?;
+    let command = match cli.command {
+        Command::Workspace(command) => command,
+        Command::Doctor => {
+            let checks = doctor::run(
+                &cwd.join(cli.workspace.unwrap_or_default()),
+                cli.dir.map(|dir| cwd.join(dir)),
+            );
+            for check in &checks {
+                println!("{check}");
+            }
+            let failed = checks.iter().any(|c| c.status == doctor::Status::Fail);
+            return Ok(i32::from(failed));
+        }
+    };
     let workspace = workspace_root(cli.workspace.as_deref().unwrap_or(&cwd))?;
     // Children run in other directories (workspace root, package dirs), so a
     // relative --dir must resolve against the caller's directory once, here.
     let dirs = ArtifactDir::resolve(cli.dir.map(|dir| cwd.join(dir)), &workspace);
 
-    match cli.command {
-        Command::Collect {
+    match command {
+        WorkspaceCommand::Collect {
             nextest,
             before,
             nextest_args,
@@ -162,7 +196,7 @@ fn run(cli: Cli) -> Result<i32> {
             println!("{}", dirs.root().display());
             Ok(0)
         }
-        Command::Analyze { near, markdown } => {
+        WorkspaceCommand::Analyze { near, markdown } => {
             if !(0.0..=1.0).contains(&near) {
                 bail!("--near must be between 0 and 1, got {near}");
             }
@@ -179,12 +213,12 @@ fn run(cli: Cli) -> Result<i32> {
             render(&analysis, &dirs, (&markdown).into())?;
             Ok(0)
         }
-        Command::Report { markdown } => {
+        WorkspaceCommand::Report { markdown } => {
             let analysis = load_analysis(&dirs)?;
             render(&analysis, &dirs, (&markdown).into())?;
             Ok(0)
         }
-        Command::Verdict { input, expect } => {
+        WorkspaceCommand::Verdict { input, expect } => {
             let analysis = load_analysis(&dirs)?;
             let text = match input {
                 Some(path) => std::fs::read_to_string(&path)
@@ -195,15 +229,45 @@ fn run(cli: Cli) -> Result<i32> {
                     text
                 }
             };
-            let expect = expect.map(|path| read_expect(&path)).transpose()?;
+            let expect = expect.map(|json| read_expect(&json)).transpose()?;
             let ledger = Ledger::new(dirs.verdicts());
             let summary = ledger.record(&text, &analysis.pairs(), expect.as_deref())?;
-            println!("{}", serde_json::to_string(&summary)?);
             let contents = ledger.read()?;
+            let review = Review::of(&analysis, &contents);
+            let output = VerdictOutput {
+                summary: &summary,
+                pending: review.pending,
+                coverage_loss: review.loss,
+            };
+            println!("{}", serde_json::to_string(&output)?);
             report::write_all(&analysis, &contents, &dirs, MarkdownOptions::default())?;
             Ok(summary.exit_code())
         }
-        Command::Path { artifact } => {
+        WorkspaceCommand::Pending { limit } => {
+            let analysis = load_analysis(&dirs)?;
+            let contents = Ledger::new(dirs.verdicts()).read()?;
+            let rows = report::pending_rows(&analysis, &contents);
+            if rows.is_empty() {
+                eprintln!(
+                    "dwd: all {} candidates have current verdicts",
+                    analysis.candidates.len()
+                );
+                return Ok(0);
+            }
+            let same_file = rows.iter().filter(|r| r.row.same_file).count();
+            let stale = rows.iter().filter(|r| r.previous.is_some()).count();
+            let shown = rows.len().min(limit);
+            eprintln!(
+                "dwd: {} of {} candidates pending ({same_file} same-file, {stale} stale); showing {shown}",
+                rows.len(),
+                analysis.candidates.len()
+            );
+            for row in rows.iter().take(limit) {
+                println!("{}", serde_json::to_string(row)?);
+            }
+            Ok(0)
+        }
+        WorkspaceCommand::Path { artifact } => {
             let path = match artifact {
                 Artifact::Dir => dirs.root().to_path_buf(),
                 Artifact::Report => dirs.report_html(),
@@ -244,8 +308,22 @@ fn render(analysis: &Analysis, dirs: &ArtifactDir, markdown: MarkdownOptions) ->
         dirs.candidates().display(),
         dirs.report_html().display()
     );
-    println!("{}", dirs.report_html().display());
+    print!(
+        "{}",
+        report::summary(analysis, &contents, &dirs.report_html())
+    );
     Ok(())
+}
+
+/// What `dwd verdict` prints: the record summary plus review status.
+#[derive(Serialize)]
+struct VerdictOutput<'a> {
+    #[serde(flatten)]
+    summary: &'a RecordSummary,
+    /// Candidates with no verdict or a stale one.
+    pending: usize,
+    /// Coverage the cut and merge verdicts lose. Never changes the exit code.
+    coverage_loss: CoverageLoss,
 }
 
 /// An `--expect` row: any candidate row; only the pair matters.
@@ -255,9 +333,8 @@ struct ExpectRow {
     other: TestId,
 }
 
-fn read_expect(path: &std::path::Path) -> Result<Vec<Pair>> {
-    let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    let rows: Vec<ExpectRow> =
-        serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
+/// Parses the inline `--expect` JSON array.
+fn read_expect(json: &str) -> Result<Vec<Pair>> {
+    let rows: Vec<ExpectRow> = serde_json::from_str(json).context("parse --expect")?;
     Ok(rows.into_iter().map(|r| (r.test, r.other)).collect())
 }

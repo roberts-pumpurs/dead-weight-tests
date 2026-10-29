@@ -51,6 +51,10 @@
       <div class="card"><b>{{ value }}</b><span>{{ label }}</span></div>
       {%- endfor %}
     </div>
+    {%- if let Some(line) = loss_line %}
+    <p>{{ line }}.{% if !loss_files.is_empty() %} Top files:
+      {%- for f in loss_files %} <code>{{ f.path }}</code> {{ f.regions }}{% if !loop.last %},{% endif %}{% endfor %}{% endif %}</p>
+    {%- endif %}
     {%- if !empty.is_empty() %}
     <details><summary>Tests with no covered non-test regions ({{ empty.len() + empty_more }})</summary><ul>
       {%- for (ti, id) in empty %}

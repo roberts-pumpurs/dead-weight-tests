@@ -31,22 +31,14 @@ impl LlvmTools {
     /// Finds `llvm-profdata` and `llvm-cov` in the sysroot of the toolchain
     /// `workspace` selects (it may pin one with rust-toolchain.toml).
     pub fn locate(workspace: &Path) -> Result<Self> {
-        let sysroot = command_stdout(
-            Command::new("rustc")
-                .args(["--print", "sysroot"])
-                .current_dir(workspace),
-        )?;
-        let bin = Path::new(sysroot.trim())
+        let bin = sysroot(workspace)?
             .join("lib/rustlib")
             .join(host_triple(workspace)?)
             .join("bin");
         let tool = |name: &str| {
             let path = bin.join(name);
             if !path.is_file() {
-                bail!(
-                    "missing {}; install it with `rustup component add llvm-tools-preview`",
-                    path.display()
-                );
+                bail!("missing {}", path.display());
             }
             Ok(path)
         };
@@ -55,6 +47,16 @@ impl LlvmTools {
             cov: tool("llvm-cov")?,
         })
     }
+}
+
+/// The sysroot of the toolchain `workspace` selects.
+pub fn sysroot(workspace: &Path) -> Result<PathBuf> {
+    let text = command_stdout(
+        Command::new("rustc")
+            .args(["--print", "sysroot"])
+            .current_dir(workspace),
+    )?;
+    Ok(PathBuf::from(text.trim()))
 }
 
 /// The host target triple from `rustc -vV`, for the toolchain `workspace` selects.
@@ -96,16 +98,26 @@ struct Target {
     kind: Vec<String>,
 }
 
-/// Built workspace binaries that tests may spawn as subprocesses. Run with the
-/// coverage `env`, whose target directory differs from a normal build's.
-pub fn workspace_bins(workspace: &Path, env: &Env) -> Result<Vec<PathBuf>> {
+/// The workspace's metadata from `cargo metadata`, under `env`.
+fn metadata(workspace: &Path, env: &Env) -> Result<Metadata> {
     let text = command_stdout(
         Command::new("cargo")
             .args(["metadata", "--no-deps", "--format-version", "1"])
             .current_dir(workspace)
             .envs(env.iter().map(|(k, v)| (k, v))),
     )?;
-    let metadata: Metadata = serde_json::from_str(&text).context("parse cargo metadata")?;
+    serde_json::from_str(&text).context("parse cargo metadata")
+}
+
+/// The target directory a normal build of `workspace` uses.
+pub fn target_directory(workspace: &Path) -> Result<PathBuf> {
+    Ok(metadata(workspace, &[])?.target_directory)
+}
+
+/// Built workspace binaries that tests may spawn as subprocesses. Run with the
+/// coverage `env`, whose target directory differs from a normal build's.
+pub fn workspace_bins(workspace: &Path, env: &Env) -> Result<Vec<PathBuf>> {
+    let metadata = metadata(workspace, env)?;
     let debug = metadata.target_directory.join("debug");
     let mut bins: Vec<PathBuf> = metadata
         .packages

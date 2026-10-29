@@ -8,6 +8,10 @@
 - Subsumed candidates: {{ subsumed }}{{ subsumed_tiers }}
 - Near duplicates (Jaccard >= {{ near_threshold }}): {{ near }}
 - Same-file pairs (candidate and other in one source file, listed first): {{ same_file }}
+- Reviewed: {{ reviewed }}. Pending: {{ pending }}{% if stale > 0 %} ({{ stale }} stale: a reviewed test body changed){% endif %}
+{%- if let Some(line) = loss_line %}
+- {{ line }}{% if !loss_files.is_empty() %}. Top files: {{ loss_files }}{% endif %}
+{%- endif %}
 
 Candidates are suspects. Coverage shows what a test executes, not what it asserts.
 Read the candidate and the other test before cutting.
@@ -40,9 +44,13 @@ Read the candidate and the other test before cutting.
 - Near twin: `{{ c.other }}` ({{ c.other_tier }}, {{ c.other_location }}) covers {{ c.other_regions }} regions
 - Reason: Jaccard {{ c.jaccard }}. They share {{ c.shared }} regions; this test adds {{ c.extra }} (in {{ c.diff_files }}), the twin adds {{ c.gap }}.
 {%- endif %}
-{%- if let Some(v) = c.verdict %}
+{%- match c.verdict %}
+{%- when Some(Judged::Fresh(v)) %}
 - Verdict: {{ v.verdict.as_str() }}. {{ v.reason }}
-{%- endif %}
+{%- when Some(Judged::Stale(v)) %}
+- Verdict: {{ v.verdict.as_str() }} (stale: test body changed). {{ v.reason }}
+{%- when None %}
+{%- endmatch %}
 {%- endfor %}
 {%- if empty_count > 0 %}
 

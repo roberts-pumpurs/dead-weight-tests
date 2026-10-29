@@ -215,3 +215,57 @@ fn same_file_pair_ranks_before_a_smaller_cross_file_gap() {
     );
     assert!(analysis.candidates[0].same_file);
 }
+
+/// Removes the tests named in `names` from the report fixture.
+fn loss(analysis: &Analysis, names: &[&str]) -> CoverageLoss {
+    let removed = analysis
+        .tests
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| names.contains(&t.id.name.as_str()))
+        .map(|(i, _)| TestIdx::new(i))
+        .collect();
+    analysis.coverage_loss(&removed)
+}
+
+#[test]
+fn coverage_kept_by_a_surviving_test_is_not_lost() {
+    let analysis = crate::report::fixture::analysis();
+    let got = loss(&analysis, &["tests::small", "copy_of_big"]);
+    assert_eq!((got.removed, got.lost_regions), (2, 0));
+    assert!(got.files.is_empty() && got.tests.is_empty());
+}
+
+#[test]
+fn cutting_a_test_with_its_witness_loses_the_witness_unique_regions() {
+    let analysis = crate::report::fixture::analysis();
+    // small keeps class 0; class 1 was only in big and copy_of_big.
+    let got = loss(&analysis, &["tests::big", "copy_of_big"]);
+    assert_eq!(got.lost_regions, 1);
+    assert_eq!(
+        got.files,
+        [FileLoss {
+            path: "src/lib.rs".into(),
+            regions: 1
+        }]
+    );
+    let names: Vec<&str> = got.tests.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, ["tests::big", "copy_of_big"]);
+}
+
+#[test]
+fn cutting_a_near_duplicate_loses_its_extra_regions() {
+    let mut analysis = crate::report::fixture::analysis();
+    analysis.regions.push(RegionKey {
+        file: FileIdx(0),
+        line_start: 3,
+        col_start: 1,
+        line_end: 3,
+        col_end: 9,
+    });
+    analysis.classes.push(vec![RegionIdx(2)]);
+    analysis.tests[1].classes.push(ClassIdx(2));
+    let got = loss(&analysis, &["tests::small"]);
+    assert_eq!(got.lost_regions, 1);
+    assert_eq!(got.tests, [analysis.tests[1].id.clone()]);
+}

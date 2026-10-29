@@ -21,6 +21,10 @@
         {
           "type": "generic",
           "path": "skills/dead-weight-tests/SKILL.md"
+        },
+        {
+          "type": "generic",
+          "path": "README.md"
         }
       ]
     }

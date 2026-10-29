@@ -29,9 +29,10 @@ use serde::{Deserialize, Serialize};
 use crate::ids::{ClassIdx, FileIdx, RegionIdx, TestIdx};
 use crate::skipped::Skipped;
 use crate::test_id::{TestId, Tier};
+use crate::verdict::{BodyHashes, Pair};
 
 /// Bump when the persisted analysis layout changes.
-pub const ANALYSIS_VERSION: u32 = 1;
+pub const ANALYSIS_VERSION: u32 = 2;
 
 /// Default Jaccard threshold for near duplicates.
 pub const DEFAULT_NEAR: f64 = 0.95;
@@ -133,6 +134,9 @@ pub struct TestBody {
     pub start: u32,
     pub end: u32,
     pub source: String,
+    /// [`crate::verdict::body_hash`] of `source`, computed once at analysis; verdicts store it
+    /// to notice a changed body.
+    pub hash: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -344,12 +348,26 @@ impl Analysis {
         &self.tests[idx.get()]
     }
 
-    /// Every (candidate, other) pair, as the verdict ledger keys them.
-    pub fn pairs(&self) -> HashSet<(TestId, TestId)> {
+    /// Every (candidate, other) pair, as the verdict ledger keys them, with the current body hashes.
+    pub fn pairs(&self) -> HashMap<Pair, BodyHashes> {
         self.candidates
             .iter()
-            .map(|c| (self.test(c.test).id.clone(), self.test(c.other).id.clone()))
+            .map(|c| (self.pair(c), self.body_hashes(c)))
             .collect()
+    }
+
+    /// The ledger key of a candidate.
+    pub fn pair(&self, c: &Candidate) -> Pair {
+        (self.test(c.test).id.clone(), self.test(c.other).id.clone())
+    }
+
+    /// Hashes of the candidate's and the other test's bodies, when known.
+    pub fn body_hashes(&self, c: &Candidate) -> BodyHashes {
+        let hash = |idx| self.test(idx).body.as_ref().map(|b| b.hash.clone());
+        BodyHashes {
+            test: hash(c.test),
+            other: hash(c.other),
+        }
     }
 
     /// Tests with no covered non-test regions.
@@ -377,4 +395,63 @@ impl Analysis {
             .map(|(file, count)| (self.files[file.get()].path.as_str(), count))
             .collect()
     }
+
+    /// The coverage that disappears when `removed` tests are deleted: classes
+    /// some removed test covers and no remaining test does.
+    pub fn coverage_loss(&self, removed: &HashSet<TestIdx>) -> CoverageLoss {
+        let is_removed = |i: &usize| removed.contains(&TestIdx::new(*i));
+        let kept: HashSet<ClassIdx> = (0..self.tests.len())
+            .filter(|i| !is_removed(i))
+            .flat_map(|i| self.tests[i].classes.iter().copied())
+            .collect();
+        let mut lost: HashSet<ClassIdx> = HashSet::new();
+        let mut tests = Vec::new();
+        for (_, test) in self.tests.iter().enumerate().filter(|(i, _)| is_removed(i)) {
+            let own_lost: Vec<ClassIdx> = test
+                .classes
+                .iter()
+                .copied()
+                .filter(|c| !kept.contains(c))
+                .collect();
+            if !own_lost.is_empty() {
+                lost.extend(own_lost);
+                tests.push(test.id.clone());
+            }
+        }
+        let lost_regions = lost.iter().map(|c| self.classes[c.get()].len()).sum();
+        let files = self
+            .top_files(lost, usize::MAX)
+            .into_iter()
+            .map(|(path, regions)| FileLoss {
+                path: path.to_owned(),
+                regions,
+            })
+            .collect();
+        CoverageLoss {
+            removed: removed.len(),
+            lost_regions,
+            files,
+            tests,
+        }
+    }
+}
+
+/// Coverage that no remaining test keeps once the removed tests are deleted.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct CoverageLoss {
+    /// Tests removed.
+    pub removed: usize,
+    /// Regions only removed tests covered.
+    pub lost_regions: usize,
+    /// Lost regions per file, most first.
+    pub files: Vec<FileLoss>,
+    /// Removed tests that covered at least one lost region.
+    pub tests: Vec<TestId>,
+}
+
+/// Lost regions in one file.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct FileLoss {
+    pub path: String,
+    pub regions: usize,
 }

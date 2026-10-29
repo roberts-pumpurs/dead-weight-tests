@@ -1,8 +1,9 @@
 //! Where `dwd` keeps its files.
 //!
-//! Default: `<temp dir>/dwd/<workspace name>-<hash of the workspace path>/`.
-//! The temp dir keeps instrumented profiles and reports out of the repo and out
-//! of `target/`. `--dir` or `DWD_DIR` overrides it.
+//! Default: `$XDG_STATE_HOME/dwd/<workspace name>-<hash of the workspace path>/`,
+//! with `~/.local/state` when `XDG_STATE_HOME` is unset. A state dir, not the
+//! temp dir: the verdict ledger is reviewed work and must survive reboots and
+//! temp cleaners. `--dir` or `DWD_DIR` overrides it.
 //!
 //! ```text
 //! <dir>/profiles/        per-test LLVM profiles (transient, removed after collect)
@@ -48,9 +49,7 @@ impl ArtifactDir {
         let name = canonical
             .file_name()
             .map_or_else(|| "workspace".into(), |n| n.to_string_lossy().into_owned());
-        std::env::temp_dir()
-            .join("dwd")
-            .join(format!("{name}-{hash}"))
+        state_home().join("dwd").join(format!("{name}-{hash}"))
     }
 
     pub fn root(&self) -> &Path {
@@ -83,6 +82,17 @@ impl ArtifactDir {
     pub fn report_html(&self) -> PathBuf {
         self.root.join("report.html")
     }
+}
+
+/// `$XDG_STATE_HOME` when it is an absolute path (the XDG spec ignores relative
+/// ones), else `~/.local/state`. Without `HOME` there is no persistent place,
+/// so it falls back to the temp dir.
+fn state_home() -> PathBuf {
+    let var = |key| std::env::var_os(key).map(PathBuf::from);
+    if let Some(dir) = var("XDG_STATE_HOME").filter(|dir| dir.is_absolute()) {
+        return dir;
+    }
+    var("HOME").map_or_else(std::env::temp_dir, |home| home.join(".local/state"))
 }
 
 /// The root of the Cargo workspace that contains `dir`.

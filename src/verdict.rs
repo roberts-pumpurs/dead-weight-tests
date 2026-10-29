@@ -2,10 +2,11 @@
 //!
 //! This module is the only code that knows what a valid verdict row is.
 //! Writing ([`Ledger::record`]) and reading ([`Ledger::read`]) apply the same
-//! row rule; recording also requires the pair to be a known candidate.
-//! Later lines win for the same (test, other) pair.
+//! row rule; recording also requires the pair to be a known candidate and
+//! stamps each side's body hash from the analysis. Later lines win for the
+//! same (test, other) pair. [`judge`] decides whether a verdict is stale.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -14,6 +15,7 @@ use anyhow::{Context, Result};
 use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::test_id::TestId;
 
@@ -62,9 +64,69 @@ pub struct VerdictRecord {
     pub verdict: Verdict,
     /// One sentence naming the concrete assertion difference. Never blank.
     pub reason: String,
+    /// [`body_hash`] of the candidate's body at record time. Absent on old lines or unknown bodies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub test_hash: Option<String>,
+    /// [`body_hash`] of the other test's body at record time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub other_hash: Option<String>,
 }
 
 pub type Pair = (TestId, TestId);
+
+/// Current body hashes of a candidate pair, `None` where the body is unknown.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BodyHashes {
+    pub test: Option<String>,
+    pub other: Option<String>,
+}
+
+/// A test body's hash: the first 16 hex digits of its sha256.
+pub fn body_hash(source: &str) -> String {
+    Sha256::digest(source.as_bytes())
+        .iter()
+        .take(8)
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// A recorded verdict checked against the current test bodies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Judged<'a> {
+    /// The reviewed bodies are unchanged: the verdict stands.
+    Fresh(&'a VerdictRecord),
+    /// A reviewed body changed since: the pair needs review again.
+    Stale(&'a VerdictRecord),
+}
+
+impl<'a> Judged<'a> {
+    /// The verdict when it still stands.
+    pub fn fresh(self) -> Option<&'a VerdictRecord> {
+        match self {
+            Judged::Fresh(r) => Some(r),
+            Judged::Stale(_) => None,
+        }
+    }
+
+    /// The verdict when it went stale.
+    pub fn stale(self) -> Option<&'a VerdictRecord> {
+        match self {
+            Judged::Stale(r) => Some(r),
+            Judged::Fresh(_) => None,
+        }
+    }
+}
+
+/// Stale when a stored hash differs from the current one. A side without a
+/// stored hash (old lines) or without a current body counts as unchanged.
+pub fn judge<'a>(record: &'a VerdictRecord, current: &BodyHashes) -> Judged<'a> {
+    let changed = |stored: &Option<String>, now: &Option<String>| matches!((stored, now), (Some(s), Some(n)) if s != n);
+    if changed(&record.test_hash, &current.test) || changed(&record.other_hash, &current.other) {
+        Judged::Stale(record)
+    } else {
+        Judged::Fresh(record)
+    }
+}
 
 /// Why a row was rejected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
@@ -102,7 +164,7 @@ pub struct LedgerContents {
 pub struct RecordSummary {
     pub recorded: usize,
     pub invalid: Vec<InvalidRow>,
-    /// Expected pairs that still have no verdict.
+    /// Expected pairs that still have no fresh verdict.
     pub missing: Vec<Pair>,
 }
 
@@ -157,19 +219,25 @@ impl Ledger {
     }
 
     /// Validates `input` (JSON lines, or one JSON array) and appends the valid
-    /// rows. `known` is the set of candidate pairs. `expect` lists pairs that
+    /// rows. `known` maps each candidate pair to its current body hashes,
+    /// which replace any hashes the input carries. `expect` lists pairs that
     /// must have a verdict after recording.
     pub fn record(
         &self,
         input: &str,
-        known: &HashSet<Pair>,
+        known: &HashMap<Pair, BodyHashes>,
         expect: Option<&[Pair]>,
     ) -> Result<RecordSummary> {
         let mut rows = Vec::new();
         let mut invalid = Vec::new();
         for (line, item) in parse_input(input) {
             match item.and_then(|value| check_row(value, Some(known))) {
-                Ok(record) => rows.push(record),
+                Ok(mut record) => {
+                    let hashes = &known[&(record.test.clone(), record.other.clone())];
+                    record.test_hash = hashes.test.clone();
+                    record.other_hash = hashes.other.clone();
+                    rows.push(record);
+                }
                 Err(rejected) => invalid.push(rejected.at(line)),
             }
         }
@@ -191,9 +259,15 @@ impl Ledger {
 
         let mut missing = Vec::new();
         if let Some(expect) = expect {
-            let judged = self.read()?.verdicts;
+            let recorded = self.read()?.verdicts;
+            let fresh = |pair: &Pair| {
+                recorded.get(pair).is_some_and(|record| {
+                    let current = known.get(pair).cloned().unwrap_or_default();
+                    matches!(judge(record, &current), Judged::Fresh(_))
+                })
+            };
             for pair in expect {
-                if !judged.contains_key(pair) && !missing.contains(pair) {
+                if !fresh(pair) && !missing.contains(pair) {
                     missing.push(pair.clone());
                 }
             }
@@ -218,6 +292,10 @@ struct RawRow {
     verdict: Field,
     #[serde(default)]
     reason: Field,
+    #[serde(default)]
+    test_hash: Field,
+    #[serde(default)]
+    other_hash: Field,
 }
 
 /// A JSON value that is either a string or anything else (including absent).
@@ -272,7 +350,12 @@ impl Rejected {
 ///   is given) not a known pair → `UnknownPair`;
 /// - `verdict` missing, not a string, or not a [`Verdict`] → `UnknownVerdict`;
 /// - `reason` missing, not a string, or blank → `EmptyReason`.
-fn check_row(value: Value, known: Option<&HashSet<Pair>>) -> Result<VerdictRecord, Rejected> {
+///
+/// `test_hash`/`other_hash` are kept when they are strings, else dropped.
+fn check_row(
+    value: Value,
+    known: Option<&HashMap<Pair, BodyHashes>>,
+) -> Result<VerdictRecord, Rejected> {
     if !value.is_object() {
         return Err(Rejected::malformed());
     }
@@ -287,7 +370,7 @@ fn check_row(value: Value, known: Option<&HashSet<Pair>>) -> Result<VerdictRecor
         return Err(reject(RowError::UnknownPair));
     };
     let pair = (test, other);
-    if known.is_some_and(|known| !known.contains(&pair)) {
+    if known.is_some_and(|known| !known.contains_key(&pair)) {
         return Err(reject(RowError::UnknownPair));
     }
     let verdict = raw
@@ -305,6 +388,8 @@ fn check_row(value: Value, known: Option<&HashSet<Pair>>) -> Result<VerdictRecor
         other,
         verdict,
         reason,
+        test_hash: raw.test_hash.as_str().map(str::to_owned),
+        other_hash: raw.other_hash.as_str().map(str::to_owned),
     })
 }
 
@@ -376,9 +461,10 @@ mod tests {
         TestId::new("crate", name)
     }
 
-    fn known() -> HashSet<Pair> {
+    fn known() -> HashMap<Pair, BodyHashes> {
         [(id("a"), id("b")), (id("c"), id("d"))]
             .into_iter()
+            .map(|pair| (pair, BodyHashes::default()))
             .collect()
     }
 
@@ -519,6 +605,61 @@ mod tests {
             Verdict::Fix
         );
         assert_eq!(contents.invalid, [Rejected::malformed().at(2)]);
+    }
+
+    #[test]
+    fn record_stamps_analysis_hashes_over_reviewer_values() {
+        let (_dir, ledger) = ledger();
+        let mut known = known();
+        let current = BodyHashes {
+            test: Some(body_hash("fn a() {}")),
+            other: None,
+        };
+        known.insert((id("a"), id("b")), current.clone());
+        let input = r#"{"test": "crate a", "other": "crate b", "verdict": "cut", "reason": "r", "test_hash": "x", "other_hash": "y"}"#;
+        ledger.record(input, &known, None).unwrap();
+        let record = &ledger.read().unwrap().verdicts[&(id("a"), id("b"))];
+        assert_eq!(record.test_hash, current.test);
+        assert_eq!(record.other_hash, None);
+        assert_eq!(body_hash("x").len(), 16);
+    }
+
+    #[test]
+    fn judge_flags_changed_bodies_only() {
+        let record = VerdictRecord {
+            test: id("a"),
+            other: id("b"),
+            verdict: Verdict::Cut,
+            reason: "r".into(),
+            test_hash: Some(body_hash("old")),
+            other_hash: Some(body_hash("other")),
+        };
+        let now = |test: Option<&str>, other: Option<&str>| BodyHashes {
+            test: test.map(body_hash),
+            other: other.map(body_hash),
+        };
+        assert_eq!(
+            judge(&record, &now(Some("old"), Some("other"))),
+            Judged::Fresh(&record)
+        );
+        assert_eq!(
+            judge(&record, &now(Some("new"), Some("other"))),
+            Judged::Stale(&record)
+        );
+        assert_eq!(
+            judge(&record, &now(Some("old"), Some("new"))),
+            Judged::Stale(&record)
+        );
+        assert_eq!(judge(&record, &now(None, None)), Judged::Fresh(&record));
+        let legacy = VerdictRecord {
+            test_hash: None,
+            other_hash: None,
+            ..record.clone()
+        };
+        assert_eq!(
+            judge(&legacy, &now(Some("new"), Some("new"))),
+            Judged::Fresh(&legacy)
+        );
     }
 
     #[test]

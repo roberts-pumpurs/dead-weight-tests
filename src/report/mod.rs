@@ -8,12 +8,16 @@
 mod html;
 mod markdown;
 
+use std::collections::{BTreeMap, HashSet};
+use std::path::Path;
+
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-use crate::analysis::{Analysis, Candidate, Location, Relation, Test};
+use crate::analysis::{Analysis, Candidate, CandidateKind, CoverageLoss, Location, Relation, Test};
 use crate::artifacts::ArtifactDir;
-use crate::verdict::{LedgerContents, VerdictRecord};
+use crate::ids::TestIdx;
+use crate::verdict::{Judged, LedgerContents, Verdict, judge};
 
 /// Limits for the markdown report.
 #[derive(Clone, Copy, Debug)]
@@ -145,17 +149,16 @@ fn round4(x: f64) -> f64 {
     (x * 10_000.0).round() / 10_000.0
 }
 
-/// The ledger's verdict for a candidate pair.
+/// The ledger's verdict for a candidate pair, judged against the current bodies.
 fn verdict_of<'a>(
     analysis: &Analysis,
     verdicts: &'a LedgerContents,
     c: &Candidate,
-) -> Option<&'a VerdictRecord> {
-    let key = (
-        analysis.test(c.test).id.clone(),
-        analysis.test(c.other).id.clone(),
-    );
-    verdicts.verdicts.get(&key)
+) -> Option<Judged<'a>> {
+    verdicts
+        .verdicts
+        .get(&analysis.pair(c))
+        .map(|record| judge(record, &analysis.body_hashes(c)))
 }
 
 /// Tests with coverage, split by tier: (unit, integration).
@@ -166,6 +169,175 @@ fn covered_tiers(tests: &[Test]) -> (usize, usize) {
         .filter(|t| t.tier() == crate::test_id::Tier::Unit)
         .count();
     (unit, covered.count() - unit)
+}
+
+/// Strongest fresh verdict per test over the pairs where it is the candidate (see [`Verdict::rank`]).
+pub fn strongest_verdicts(
+    analysis: &Analysis,
+    ledger: &LedgerContents,
+) -> BTreeMap<TestIdx, Verdict> {
+    let mut strongest: BTreeMap<TestIdx, Verdict> = BTreeMap::new();
+    for c in &analysis.candidates {
+        if let Some(record) = verdict_of(analysis, ledger, c).and_then(Judged::fresh) {
+            let best = strongest.entry(c.test).or_insert(record.verdict);
+            if record.verdict.rank() > best.rank() {
+                *best = record.verdict;
+            }
+        }
+    }
+    strongest
+}
+
+/// Tests a reviewer removes: any fresh pair verdict is cut or merge.
+pub fn removed_tests(analysis: &Analysis, ledger: &LedgerContents) -> HashSet<TestIdx> {
+    strongest_verdicts(analysis, ledger)
+        .into_iter()
+        .filter(|(_, v)| matches!(v, Verdict::Cut | Verdict::Merge))
+        .map(|(t, _)| t)
+        .collect()
+}
+
+/// Review progress over the candidates. Stale verdicts count as pending.
+#[derive(Clone, Debug)]
+pub struct Review {
+    /// Candidates with a fresh verdict.
+    pub reviewed: usize,
+    /// Candidates whose verdict went stale (included in `pending`).
+    pub stale: usize,
+    /// Candidates without a fresh verdict.
+    pub pending: usize,
+    /// What the fresh cut and merge verdicts lose.
+    pub loss: CoverageLoss,
+}
+
+impl Review {
+    pub fn of(analysis: &Analysis, ledger: &LedgerContents) -> Self {
+        let (mut reviewed, mut stale) = (0, 0);
+        for c in &analysis.candidates {
+            match verdict_of(analysis, ledger, c) {
+                Some(Judged::Fresh(_)) => reviewed += 1,
+                Some(Judged::Stale(_)) => stale += 1,
+                None => {}
+            }
+        }
+        Review {
+            reviewed,
+            stale,
+            pending: analysis.candidates.len() - reviewed,
+            loss: analysis.coverage_loss(&removed_tests(analysis, ledger)),
+        }
+    }
+
+    /// `Cuts and merges remove N tests and lose X regions`, or `None` without cuts or merges.
+    pub fn loss_line(&self) -> Option<String> {
+        (self.loss.removed > 0).then(|| {
+            let s = |n: usize| if n == 1 { "" } else { "s" };
+            let (tests, regions) = (self.loss.removed, self.loss.lost_regions);
+            format!(
+                "Cuts and merges remove {tests} test{} and lose {regions} region{}",
+                s(tests),
+                s(regions)
+            )
+        })
+    }
+
+    /// The top `limit` files of the loss as `` `path` n ``, comma-separated.
+    pub fn loss_files(&self, limit: usize) -> String {
+        let parts: Vec<String> = self
+            .loss
+            .files
+            .iter()
+            .take(limit)
+            .map(|f| format!("`{}` {}", f.path, f.regions))
+            .collect();
+        parts.join(", ")
+    }
+}
+
+/// A `dwd pending` row: the candidate row plus the stale verdict it replaces.
+#[derive(Clone, Debug, Serialize)]
+pub struct PendingRow {
+    #[serde(flatten)]
+    pub row: CandidateRow,
+    /// The verdict recorded before a reviewed body changed. Absent when never reviewed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous: Option<Previous>,
+}
+
+/// A stale verdict as shown to the next reviewer.
+#[derive(Clone, Debug, Serialize)]
+pub struct Previous {
+    pub verdict: Verdict,
+    pub reason: String,
+}
+
+/// Candidates without a fresh verdict, in rank order.
+pub fn pending_rows(analysis: &Analysis, ledger: &LedgerContents) -> Vec<PendingRow> {
+    candidate_rows(analysis)
+        .into_iter()
+        .zip(&analysis.candidates)
+        .filter_map(|(row, c)| match verdict_of(analysis, ledger, c) {
+            Some(Judged::Fresh(_)) => None,
+            Some(Judged::Stale(r)) => Some(PendingRow {
+                row,
+                previous: Some(Previous {
+                    verdict: r.verdict,
+                    reason: r.reason.clone(),
+                }),
+            }),
+            None => Some(PendingRow {
+                row,
+                previous: None,
+            }),
+        })
+        .collect()
+}
+
+/// The plain-text status `dwd analyze` and `dwd report` print.
+pub fn summary(analysis: &Analysis, ledger: &LedgerContents, report_html: &Path) -> String {
+    let (unit, integration) = covered_tiers(&analysis.tests);
+    let count = |kind| {
+        analysis
+            .candidates
+            .iter()
+            .filter(|c| c.kind() == kind)
+            .count()
+    };
+    let review = Review::of(analysis, ledger);
+    let mut out = format!(
+        "tests: {} with coverage, {} skipped\n",
+        unit + integration,
+        analysis.skipped.len()
+    );
+    let kinds: Vec<String> = CandidateKind::ALL
+        .iter()
+        .map(|&k| format!("{} {}", count(k), k.as_str()))
+        .collect();
+    out += &format!(
+        "candidates: {} ({}), {} same-file\n",
+        analysis.candidates.len(),
+        kinds.join(", "),
+        analysis.candidates.iter().filter(|c| c.same_file).count()
+    );
+    let stale = if review.stale > 0 {
+        format!(" ({} stale: a reviewed test body changed)", review.stale)
+    } else {
+        String::new()
+    };
+    out += &format!(
+        "reviewed: {}, pending: {}{stale}\n",
+        review.reviewed, review.pending
+    );
+    if let Some(line) = review.loss_line() {
+        let files = review.loss_files(3);
+        out += &line;
+        if !files.is_empty() {
+            out += &format!(" (top files: {files})");
+        }
+        out.push('\n');
+    }
+    out += &format!("report: {}\n", report_html.display());
+    out
 }
 
 #[cfg(test)]
@@ -253,5 +425,99 @@ pub(crate) mod fixture {
                 excluded_test_regions: 0,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::analysis::TestBody;
+    use crate::test_id::TestId;
+    use crate::verdict::{VerdictRecord, body_hash};
+
+    /// The fixture with `copy_of_big` (candidate 2's test) now at `body`, and a
+    /// ledger holding one cut on that pair stamped with `stamped` (`None`: a legacy line).
+    fn reviewed_with(body: &str, stamped: Option<&str>) -> (Analysis, LedgerContents) {
+        let mut analysis = fixture::analysis();
+        analysis.tests[2].body = Some(TestBody {
+            path: "tests/cli.rs".into(),
+            start: 3,
+            end: 5,
+            source: body.into(),
+            hash: body_hash(body),
+        });
+        let record = VerdictRecord {
+            test: TestId::new("demo::cli", "copy_of_big"),
+            other: TestId::new("demo", "tests::big"),
+            verdict: Verdict::Cut,
+            reason: "same assertions".into(),
+            test_hash: stamped.map(body_hash),
+            other_hash: None,
+        };
+        let mut ledger = LedgerContents::default();
+        ledger
+            .verdicts
+            .insert((record.test.clone(), record.other.clone()), record);
+        (analysis, ledger)
+    }
+
+    #[test]
+    fn changed_candidate_body_makes_the_verdict_pending_with_previous() {
+        let (analysis, ledger) = reviewed_with(
+            "fn copy_of_big() { assert!(x) }",
+            Some("fn copy_of_big() {}"),
+        );
+        let rows = pending_rows(&analysis, &ledger);
+        assert_eq!(rows.len(), 2);
+        assert!(rows[0].previous.is_none());
+        let json = serde_json::to_value(&rows[1]).unwrap();
+        assert_eq!(json["test"], "demo::cli copy_of_big");
+        assert_eq!(
+            json["previous"],
+            serde_json::json!({"verdict": "cut", "reason": "same assertions"})
+        );
+        assert!(
+            serde_json::to_value(&rows[0])
+                .unwrap()
+                .get("previous")
+                .is_none()
+        );
+        let review = Review::of(&analysis, &ledger);
+        assert_eq!((review.reviewed, review.stale, review.pending), (0, 1, 2));
+        assert!(
+            summary(&analysis, &ledger, Path::new("r.html"))
+                .contains("reviewed: 0, pending: 2 (1 stale: a reviewed test body changed)")
+        );
+        let md = markdown(&analysis, &ledger, MarkdownOptions::default()).unwrap();
+        assert!(md.contains("- Verdict: cut (stale: test body changed). same assertions"));
+    }
+
+    #[test]
+    fn unchanged_body_stays_reviewed() {
+        let body = "fn copy_of_big() {}";
+        let (analysis, ledger) = reviewed_with(body, Some(body));
+        assert_eq!(pending_rows(&analysis, &ledger).len(), 1);
+        let review = Review::of(&analysis, &ledger);
+        assert_eq!((review.reviewed, review.stale, review.pending), (1, 0, 1));
+    }
+
+    #[test]
+    fn legacy_line_without_hashes_stays_reviewed() {
+        let (analysis, ledger) = reviewed_with("fn copy_of_big() { changed() }", None);
+        assert_eq!(pending_rows(&analysis, &ledger).len(), 1);
+        assert_eq!(Review::of(&analysis, &ledger).reviewed, 1);
+    }
+
+    #[test]
+    fn stale_cut_is_not_a_removal() {
+        let body = "fn copy_of_big() {}";
+        let (analysis, fresh) = reviewed_with(body, Some(body));
+        assert_eq!(
+            removed_tests(&analysis, &fresh),
+            HashSet::from([TestIdx(2)])
+        );
+        let (analysis, stale) = reviewed_with("fn copy_of_big() { assert!(x) }", Some(body));
+        assert!(removed_tests(&analysis, &stale).is_empty());
+        assert_eq!(Review::of(&analysis, &stale).loss.removed, 0);
     }
 }

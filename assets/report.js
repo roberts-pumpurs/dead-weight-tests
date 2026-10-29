@@ -27,7 +27,13 @@ function cached(map, key, make, limit = 24) {
 }
 const badge = (cls, text) => `<span class="badge ${cls}">${esc(text)}</span>`;
 const kindBadge = kind => badge('k-' + kind, kind);
-const verdictBadge = v => (v ? badge('v-' + v.verdict, v.verdict) : badge('v-none', 'unreviewed'));
+// A stale verdict (a reviewed body changed since) counts as unreviewed; it shows what was decided before.
+const verdictBadge = c =>
+  c.verdict ? badge('v-' + c.verdict.verdict, c.verdict.verdict)
+  : c.previous ? badge('v-stale', `stale: was ${c.previous.verdict}`) : badge('v-none', 'unreviewed');
+const verdictNote = c =>
+  c.verdict ? `<p><b>${esc(c.verdict.verdict)}</b>: ${esc(c.verdict.reason)}</p>`
+  : c.previous ? `<p><b>${esc(c.previous.verdict)} (stale: test body changed)</b>: ${esc(c.previous.reason)}</p>` : '';
 const testLink = ti => `<a href="#/test/${ti}" title="${esc(T[ti].id)}">${esc(T[ti].id)}</a>`;
 const regionSpan = r => `${R[r][1]}:${R[r][2]}–${R[r][3]}:${R[r][4]}`;
 
@@ -214,15 +220,17 @@ function filtered() {
   return (filteredCache = out);
 }
 
+/** `s` as one single-quoted shell word. */
+const shellQuote = s => `'${s.replace(/'/g, `'\\''`)}'`;
 function reviewPrompt(cis) {
+  const expect = JSON.stringify(cis.map(ci => ({ test: T[C[ci].test].id, other: T[C[ci].other].id })));
   const lines = [
     `Review dead-weight test candidates in ${meta.repo} with the dead-weight-tests skill ("Review prompt" way in).`,
     `Apply its "Review rules" section: read the candidate and the other test, compare assertions, decide ${meta.verdicts.map(v => v.verdict).join(', ')}.`,
-    'Record every verdict with the validating recorder. Pipe one JSON line per candidate into:',
-    meta.recorder,
+    'Pipe one JSON line per candidate into this exact command; repeat (fixing invalid or missing rows) until it exits 0:',
+    `${meta.recorder} --expect ${shellQuote(expect)}`,
     'Each line:',
     meta.verdict_line,
-    'If the recorder reports invalid rows, correct them and pipe them in again. `dwd verdict` re-renders the report after recording.',
     'Leave the tests unchanged: this is a review.',
     '',
     'Candidates:',
@@ -311,7 +319,7 @@ function renderTable() {
     const c = C[ci], t = T[c.test];
     return `<tr class="click" data-ci="${ci}"><td class="num">${ci}</td><td>${kindBadge(c.kind)}</td><td><div class="clip">${testLink(c.test)}</div></td><td>${t.tier}</td>
       <td><div class="clip">${testLink(c.other)}</div></td><td class="num">${num(c.shared)}</td><td class="num">${num(c.gap)}</td>
-      <td class="num">${num(c.extra)}</td><td class="num">${num(t.regions)}</td><td class="num">${fmtJ(c.jaccard)}</td><td>${verdictBadge(verdictOf(c))}</td></tr>`;
+      <td class="num">${num(c.extra)}</td><td class="num">${num(t.regions)}</td><td class="num">${fmtJ(c.jaccard)}</td><td>${verdictBadge(c)}</td></tr>`;
   }).join('') || '<tr><td colspan="11" class="mute">No candidates match the filters.</td></tr>';
   main.querySelectorAll('#cand th[data-sort]').forEach(th => {
     th.textContent = th.textContent.replace(/ [▲▼]$/, '') + (th.dataset.sort === sort.key ? (sort.dir > 0 ? ' ▲' : ' ▼') : '');
@@ -473,9 +481,9 @@ function hideDetail() { const panel = $('#g-detail'); if (panel) panel.hidden = 
 const testDetail = ti => `<h3>${testLink(ti)}</h3>
   <div class="mute">${T[ti].tier} · ${num(T[ti].regions)} regions · <a href="#/test/${ti}">open test page →</a></div>${bodyBlock(T[ti])}`;
 function pairDetail(ci) {
-  const c = C[ci], v = verdictOf(c);
-  return `<div>${kindBadge(c.kind)} ${verdictBadge(v)} shared <b>${num(c.shared)}</b> · gap <b>${num(c.gap)}</b> · extra <b>${num(c.extra)}</b> · Jaccard <b>${fmtJ(c.jaccard)}</b>
-    · <a href="#/pair/${ci}">open pair page →</a></div>${v ? `<p><b>${esc(v.verdict)}</b>: ${esc(v.reason)}</p>` : ''}
+  const c = C[ci];
+  return `<div>${kindBadge(c.kind)} ${verdictBadge(c)} shared <b>${num(c.shared)}</b> · gap <b>${num(c.gap)}</b> · extra <b>${num(c.extra)}</b> · Jaccard <b>${fmtJ(c.jaccard)}</b>
+    · <a href="#/pair/${ci}">open pair page →</a></div>${verdictNote(c)}
     <h3>Candidate</h3>${testDetail(c.test)}<h3>${OTHER_ROLE[c.kind]}</h3>${testDetail(c.other)}`;
 }
 
@@ -583,12 +591,12 @@ function pair([ciArg], q) {
   mine.forEach(bump);
   for (const r of theirs) if (mark[r] === 2) bump(r);
   const files = [...perFile].sort((a, b) => b[1][1] + b[1][2] - a[1][1] - a[1][2] || b[1][3] - a[1][3]);
-  const v = verdictOf(c), role = OTHER_ROLE[c.kind];
+  const role = OTHER_ROLE[c.kind];
   const side = (ti, label) => `<div><h3>${label}: ${testLink(ti)}</h3>
     <div class="mute">${T[ti].tier} · ${num(T[ti].regions)} regions${T[ti].body ? '' : ` · ${testLocLink(T[ti])}`}</div>${bodyBlock(T[ti])}</div>`;
   mount('pair', `
     <section>
-      <h2>${kindBadge(c.kind)} candidate #${ci} ${verdictBadge(v)}</h2>
+      <h2>${kindBadge(c.kind)} candidate #${ci} ${verdictBadge(c)}</h2>
       <div class="row">
         <span>shared <b>${num(c.shared)}</b></span><span>gap (${role} only) <b>${num(c.gap)}</b></span>
         <span>extra (candidate only) <b>${num(c.extra)}</b></span><span>Jaccard <b>${fmtJ(c.jaccard)}</b></span>
@@ -596,7 +604,7 @@ function pair([ciArg], q) {
         ${c.strict_supersets != null ? `<span>strict supersets <b>${num(c.strict_supersets)}</b></span>` : ''}
         ${c.same_file ? '<span><b>same file</b></span>' : ''}
       </div>
-      ${v ? `<p><b>${esc(v.verdict)}</b>: ${esc(v.reason ?? '')}</p>` : ''}
+      ${verdictNote(c)}
       <div class="row" style="margin-top:8px">
         <a class="btn" href="#/test/${c.test}">Open candidate</a><a class="btn" href="#/test/${c.other}">Open ${role}</a>
         <button id="copy-one">Copy review prompt</button>
@@ -728,7 +736,7 @@ function test([tiArg]) {
     const rows = cis.slice(0, LIST_CAP).map(ci => {
       const c = C[ci], p = c[peer];
       return `<tr><td>${upsetBox(p)}</td><td>${kindBadge(c.kind)}</td><td><div class="clip">${testLink(p)}</div></td><td class="num">${num(c.shared)}</td>
-        <td class="num">${num(c.gap)}</td><td class="num">${num(c.extra)}</td><td class="num">${fmtJ(c.jaccard)}</td><td>${verdictBadge(verdictOf(c))}</td><td><a href="#/pair/${ci}">pair →</a></td></tr>`;
+        <td class="num">${num(c.gap)}</td><td class="num">${num(c.extra)}</td><td class="num">${fmtJ(c.jaccard)}</td><td>${verdictBadge(c)}</td><td><a href="#/pair/${ci}">pair →</a></td></tr>`;
     }).join('');
     return `<h3>${title} (${num(cis.length)}${cis.length > LIST_CAP ? `, showing ${LIST_CAP}` : ''})</h3>
       <table class="grid"><thead><tr><th>UpSet</th><th>Kind</th><th>Test</th><th class="num">Shared</th><th class="num">Gap</th><th class="num">Extra</th><th class="num">Jaccard</th><th>Verdict</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;

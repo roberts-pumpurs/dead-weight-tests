@@ -7,6 +7,7 @@
 pub mod analysis;
 pub mod artifacts;
 pub mod collect;
+pub mod doctor;
 pub mod export;
 pub mod export_format;
 pub mod ids;

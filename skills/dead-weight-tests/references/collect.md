@@ -4,11 +4,9 @@ Reference for step 1 of the dead-weight-tests skill. Read it when `dwd collect` 
 
 ## Toolchain
 
-`dwd collect` looks for `llvm-cov` and `llvm-profdata` in the sysroot of the toolchain the workspace selects, before it runs any test. When they are missing, it stops and names the path it checked.
+Run `dwd doctor` before `dwd collect`. It checks the workspace, cargo-nextest, cargo-llvm-cov, the llvm-tools of the toolchain the workspace selects, the dev shell, nextest wrapper scripts, and the artifact dir. It prints one line per check and the fix for each problem. It exits 1 when a check fails; warnings do not fail it. `dwd collect` runs the same tool checks and stops at the first failure.
 
-- A workspace that pins a toolchain in `rust-toolchain.toml` needs the component for that toolchain: run `rustup component add llvm-tools-preview` inside the workspace.
-- A Nix dev shell needs `llvm-tools-preview` in its rust-overlay or fenix toolchain.
-- A project that builds only inside its dev shell (system libraries, a C SDK): run every `dwd` command inside that shell.
+A project that builds only inside its dev shell (system libraries, a C SDK) needs every `dwd` command inside that shell.
 
 ## Nextest wrapper scripts
 
@@ -48,4 +46,8 @@ dwd collect --before 'cargo build -p my-cli' -- -p my-crate
 
 ## Instrumented build artifacts
 
-The coverage wrapper sits outside cargo's fingerprint. So `dwd collect` runs `cargo llvm-cov clean --workspace` before the tests, so that workspace crates rebuild with coverage, and again when it ends (also on errors, Ctrl-C, and SIGTERM), so that the next normal build rebuilds them without coverage. A copy of `target/` taken during a collection holds instrumented artifacts that a later build would reuse: copy `target/` before or after a collection.
+`dwd collect` builds instrumented code in `<target>/dwd`, where `<target>` is the workspace's target directory from `cargo metadata` (it honors `CARGO_TARGET_DIR` and `build.target-dir`). It sets both `CARGO_TARGET_DIR` and `CARGO_BUILD_BUILD_DIR` to that directory, so a `build.build-dir` setting does not share fingerprints with normal builds. Normal builds never see those artifacts, and both builds stay incremental across runs.
+
+The coverage wrapper flags sit outside cargo's fingerprint. So `dwd collect` keeps a stamp file, `<target>/dwd/dwd-flags`, with the wrapper variables that affect codegen. When the stamp is missing or differs, for example after a cargo-llvm-cov upgrade or a change to the workspace crate list, it runs `cargo llvm-cov clean --workspace` in that directory first. Delete `<target>/dwd` to force a full instrumented rebuild.
+
+Tests that hardcode `target/debug/<bin>` paths no longer find binaries built during a collection. `CARGO_BIN_EXE_*` and lookups relative to the test executable still work.
